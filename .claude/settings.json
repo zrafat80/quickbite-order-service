@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(psql:*)",
+      "Bash(redis-cli:*)",
+      "Bash(pg_isready:*)",
+      "Bash(tasklist:*)",
+      "Bash(where:*)",
+      "Bash(netstat:*)",
+      "Bash(npm run migrate*)",
+      "Bash(pnpm exec knex*)",
+      "Bash(pnpm exec tsc*)",
+      "Bash(npx tsc*)",
+      "PowerShell(psql *)",
+      "PowerShell(Get-Process*)",
+      "PowerShell(Get-ChildItem*)"
+    ]
+  }
+}

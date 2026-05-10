@@ -1,0 +1,2579 @@
+ ▐▛███▜▌   Claude Code v2.1.126
+▝▜█████▛▘  Opus 4.7 · Claude Pro
+  ▘▘ ▝▝    ~\Study\Projects\foodOrderApp\order-service
+
+  Welcome to Opus 4.7 xhigh! · /effort to tune speed vs. intelligence
+
+❯ /clear                                                                        
+  ⎿  (no content)
+ ▐▛███▜▌   Claude Code v2.1.126
+▝▜█████▛▘  Opus 4.7 · Claude Pro
+  ▘▘ ▝▝    ~\Study\Projects\foodOrderApp\order-service
+
+  Welcome to Opus 4.7 xhigh! · /effort to tune speed vs. intelligence
+
+❯ /clear
+  ⎿  (no content)
+
+❯ First, read CLAUDE.md and all files in docs/ to get full context.
+
+  Second, implement Phase 0 from docs/implementation-plan.md.
+
+  During implementation, you can reference these two folders as
+  examples of the same Phase 0 already implemented:
+  - ../serviceBv2      → order-service version
+  - ../serviceBv2Core  → core-service version
+
+  These are reference implementations. The technology, structure, and
+  some details differ from our project — so don't copy blindly. Adapt
+  them to match OUR conventions (the ones in CLAUDE.md and core-service).
+
+  Apply Phase 0 in two places:
+  - This project (order-service)
+  - ../core-service (the prerequisites in section 0.5)
+
+  Make a plan first and show it to me before writing code. go
+
+  Read 41 files, listed 12 directories (ctrl+o to expand)
+
+● Now let me look at reference implementations for the order-service-specific
+  infra (sharding, messaging, websocket, core-events, core-client):
+
+  Read 20 files, listed 5 directories (ctrl+o to expand)
+  ⎿  You've hit your limit · resets 2:20am (Africa/Cairo)
+     /upgrade to increase your usage limit.
+
+✻ Cogitated for 4m 18s
+
+❯ now you should continue work but before that ask me for read/write/edit
+  permissions on order service and all folders beside it so you ask me many
+  times
+
+● I need read/write/edit access to do this work. Specifically, please grant
+  permissions for:
+
+  1. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\order-service\ — the
+  primary working directory. I need to read everything (CLAUDE.md, all docs/,
+  reference my place) and write the entire Phase 0 scaffold (src/, package.json,
+   tsconfig.json, nest-cli.json, knexfile.ts, .env.example, etc.).
+  2. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\core-service\ — to read
+  existing patterns (already partly done) and to write Phase 0.5 prerequisites:
+  a new RBAC permissions seed migration, the restaurant_branches.delivery_fee
+  migration, the internal-api-key.guard.ts, the new INTERNAL_API_KEY env in
+  app.config.ts, the events_outbox migration, the outbox dispatcher worker
+  (src/lib/events/, src/worker.ts), and outbox env entries.
+  3. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\serviceBv2\ and
+  C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\serviceBv2Core\ — read-only.
+  I won't modify these; I just need to keep reading them as references.
+  4. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\ (parent) — read-only
+  listing access so I can navigate between the four folders.
+
+  Concretely, please pre-approve (or select "always allow"):
+  - Read on any file under foodOrderApp\**
+  - Glob / Grep / Bash ls on any folder under foodOrderApp\**
+  - Write and Edit on any file under foodOrderApp\order-service\** and
+  foodOrderApp\core-service\**
+
+  That should cut the prompt count down to near-zero for the rest of the work.
+  Once you confirm, I'll finish reading the remaining reference files and
+  present the plan before writing any code.
+
+✻ Churned for 14s
+
+❯ Approved. Grant yourself:
+  - Read/Glob/Grep/Bash ls everywhere under foodOrderApp\**
+  - Write/Edit on order-service\** and core-service\**
+  - Read-only on serviceBv2\** and serviceBv2Core\**
+
+  Don't write anywhere outside order-service\ and core-service\.
+  Use /permissions internally to set these up, then proceed
+
+● Permissions noted — I'll proceed. (FYI /permissions is a built-in slash
+  command the user invokes; I can't invoke it from here. Your verbal approval is
+   what I'll act on.)
+
+  Continuing the recon before drafting the plan.
+
+  Read 2 files, listed 3 directories (ctrl+o to expand)
+
+❯ /permissions
+  ⎿  Permissions dialog dismissed
+
+❯ continue work
+
+  Read 19 files, listed 4 directories (ctrl+o to expand)
+
+● Now let me look at remaining order-service docs and check the existing state
+  of order-service / core-service files I might modify:
+
+  Read 3 files, listed 5 directories (ctrl+o to expand)
+
+● I have enough context. Let me also peek at what serviceBv2Core does for the
+  internal-api-key guard (since it may not be Nest, but principles still
+  useful), and the core-service index file structure.
+
+  Read 2 files, listed 4 directories (ctrl+o to expand)
+
+● Now I have full context. Time to lay out the plan. Let me verify the
+  core-service package.json doesn't already have the deps we'd need:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good. I have a full picture. Here is the plan.
+
+  ---
+  Phase 0 Implementation Plan
+
+  Scope
+
+  Two parallel build tracks:
+  - Track A — order-service/: NestJS 10 scaffold from scratch. No domain
+  modules. All cross-cutting infra (sharded Knex, Redis cache, AMQP consumer, WS
+   gateway, core-client base, idempotency, logging, correlation, sharding,
+  health) installed and wired so Phase 1+ only writes business code.
+  - Track B — core-service/backend/: Phase 0.5 prerequisites layered on the
+  existing Nest app — new permissions seed, delivery_fee column, events_outbox
+  table, internal-api-key guard, transactional outbox dispatcher, and a separate
+   worker process.
+
+  Key adaptations from the references
+
+  - serviceBv2 and serviceBv2Core use raw Express + TSyringe. We don't copy
+  that. We adapt their infra logic (Rabbit client, sharded Knex resolver, region
+   resolver semantics, core-events consumer flow, WS handshake, outbox drain)
+  into NestJS-native shapes (modules, providers, @Injectable, OnModuleInit /
+  OnApplicationShutdown) following core-service/backend/'s exact conventions.
+  - pkg/ files copied largely verbatim (they're already framework-agnostic).
+  - Where serviceBv2's implementation uses an AppError class, we use NestJS's
+  BadRequestException/UnauthorizedException/ServiceUnavailableException etc.,
+  per CLAUDE.md §10.
+  - Region resolver: per CLAUDE.md §8 it's middleware, per implementation-plan
+  §0.3 it reads X-Region only (no path/query/cookie/JWT fallback). I'll go with
+  the plan's stricter rule.
+  - Idempotency: copied from core verbatim — DB-fallback hook stays disabled
+  until Phase 1 lands the idempotency_keys table.
+  - Logging: copied from core. The logs table migration moves into order-service
+   migrations even though no other Phase 0 migration is created (CLAUDE.md and
+  the implementation-plan §0.4 say "no migrations in Phase 0"). Decision: I'll
+  skip the logs-table migration in Phase 0 to honor §0.4 strictly, and disable
+  the DB write path (log to console only) until Phase 1 ships a logs migration.
+  Will flag this for your call.
+  - WS: @nestjs/websockets + @nestjs/platform-socket.io +
+  @socket.io/redis-adapter, gateway with afterInit adapter install,
+  handleConnection JWT verify + room joins, WsPublisher provider. Token via
+  auth.token or cookie (per ref) — query-string omitted because of log leakage;
+  doc-string says cookie/?token=, but ref's reasoning is correct. I'll match the
+   ref (cookie + auth.token).
+  - Health: NestJS @nestjs/terminus plus a pingAll() shard fan-out (uses
+  KNEX_CONNECTION provider's pingAll).
+  - Core-client base: NestJS @Injectable provider exposing a request<T>()
+  method. Retry via pkg/utils/retry.ts. Forwards X-CorrelationId from
+  RequestContextService. Translates non-2xx to NestJS HttpException subclasses
+  (no custom AppError).
+  - AMQP module: single shared RabbitMQClient connection (auto-reconnect via
+  amqp-connection-manager), opened in OnModuleInit, closed in
+  OnApplicationShutdown.
+  - Core-events consumer: Nest module whose OnModuleInit declares topology,
+  registers consumer, dispatches via a handler registry. Registry exposes a
+  register(eventType, handler) API for later phases. Phase 0 starts empty.
+  - DI strategy: Knex provider stays under the same KNEX_CONNECTION token
+  (matches core), but the value is { db(region), dbArchive(region), pingAll() }
+  — the sharded resolver (CLAUDE.md §8). Repos in later phases will inject and
+  call this.knex.db(region) rather than the bare Knex.
+
+  Track A — order-service/ files to create
+
+  A.1 Project bootstrap
+
+  - package.json — NestJS 10 deps (mirrors core-service/backend/package.json
+  minus what we don't use: drop
+  typeorm/mysql2/cloudinary/puppeteer/handlebars/mailjet) plus amqplib,
+  amqp-connection-manager, socket.io, @socket.io/redis-adapter, ioredis,
+  @nestjs/websockets, @nestjs/platform-socket.io. Scripts: start, start:dev,
+  build, migrate, migrate:rollback, lint, test.
+  - tsconfig.json, tsconfig.build.json — copy core verbatim.
+  - nest-cli.json — copy core minus the swagger plugin/hbs assets we don't need
+  yet.
+  - .env.example — every var from §0.1 of the plan, no secrets.
+  - knexfile.ts at repo root — region-aware (reads REGION + optional
+  CLUSTER=hot|archive env vars), per the plan.
+
+  A.2 Source tree (under order-service/src/)
+
+  main.ts                                      bootstrap
+  app.module.ts                                root module
+  lib/
+    config/app.config.ts                       @nestjs/config factory; parses
+  REGIONS, builds per-region DB triples (hot+archive)
+    context/request-context.service.ts         AsyncLocalStorage (correlationId)
+    middleware/correlation.middleware.ts       x-correlation-id → ALS
+    filters/http-exception.filter.ts           global error envelope
+    filters/database-error.filter.ts           PG SQLSTATE → HTTP
+    interceptors/success.interceptor.ts        global response envelope
+  (auto-hoists meta)
+    logging/{database-logger.service,log.interface,logging.interceptor}.ts
+                                                copied; DB write path no-op
+  until logs migration ships
+    pagination/{query-parser,cursor-pagination}.ts
+                                                copied verbatim from core
+    decorators/permissions.decorator.ts        @RequirePermissions
+    cache/cache.interceptor.ts                 UnifiedCacheInterceptor (copied)
+    cache/cache-scope.decorator.ts             @CacheScope
+    idempotency/{idempotency.interceptor,idempotency.decorator}.ts
+                                                copied; DB fallback disabled
+    middleware/guards/jwtGuard.ts              cookie access_token → req.user
+  (jwt.verify with ACCESS_SECRET from config)
+    middleware/guards/permissions.guard.ts     reflector-based; resolves perms
+  via PermissionCacheService injected in later phases
+                                                (Phase 0: stub interface — only
+  the guard class lands)
+    middleware/guards/restaurant-member.guard.ts  copied
+    middleware/guards/branch-access.guard.ts   copied
+    middleware/guards/internal-api-key.guard.ts  NEW vs core — plain x-api-key
+  equality
+    middleware/guards/guard.constants.ts       error dict
+    types/express.d.ts                         augments Request with user? +
+  region? + correlationId?
+    database.module.ts                         @Global() module
+    database.providers.ts                      KNEX_CONNECTION → ShardedKnex
+  resolver (db, dbArchive, pingAll)
+    database.service.ts                        OnApplicationShutdown — destroys
+  every per-region pool
+    sharding/sharding.module.ts                exposes regions list
+    sharding/regions.ts                        canonical list helpers (isRegion,
+   assertRegion)
+    sharding/region-resolver.middleware.ts     X-Region only; sets req.region
+  (or "all"); throws BadRequestException only when consumed by an explicit guard
+   later — Phase 0 just resolves
+    sharding/shards.ts                         lazy Map<region, Knex> for
+  hot+archive
+    core-client/core-client.module.ts          @Module, exports CoreHttpClient
+    core-client/core.http-client.ts            base wrapper: fetch + retry +
+  correlation forwarding + error translation
+    messaging/messaging.module.ts              @Global() — wraps the pkg client;
+   OnModuleInit/OnApplicationShutdown
+    messaging/amqp.connection.ts               @Injectable provider — single
+  shared RabbitMQClient
+    core-events/core-events.module.ts          @Module; provides + registers
+  handler registry
+    core-events/core-events.consumer.ts        @Injectable; OnModuleInit
+  declares topology + starts consume loop
+    core-events/types.ts                       envelope + handler types
+    core-events/handler-registry.service.ts    register/lookup; injectable into
+  later modules
+    websocket/ws.module.ts                     @Module; WsGateway + WsPublisher
+    websocket/ws.gateway.ts                    @WebSocketGateway('/ws');
+  afterInit → io.adapter(redisAdapter); handleConnection → verify JWT + join
+  rooms
+    websocket/ws.publisher.ts                  @Injectable; emit(channel, event,
+   payload)
+    websocket/ws-auth.ts                       JWT verify + permittedChannels()
+  pkg/
+    cache/cache.interface.ts                   ICacheProvider
+    cache/redis.ts                             RedisCacheProvider over ioredis
+  (used for SETNX dedupe in core-events)
+    messaging/message-broker.interface.ts      IMessageBroker (consume +
+  publish)
+    messaging/rabbitmq/rabbitmq.client.ts      amqp-connection-manager wrapper
+  (copied from serviceBv2)
+    messaging/rabbitmq/rabbitmq.types.ts       config types (copied)
+    payments/payment.interface.ts              IPaymentProvider stub (interface
+  only — implementation lands in Phase 2)
+    utils/time.utils.ts                        toMs/toSeconds
+    utils/money.ts
+  toMinor/fromMinor/sumMinor/multiplyMinor
+    utils/retry.ts                             exponential backoff (copied)
+  app/
+    health/health.module.ts                    @Module
+    health/health.controller.ts                GET /api/health → calls
+  KNEX_CONNECTION.pingAll()
+  database/
+    migrations/                                empty in Phase 0 per §0.4
+
+  A.3 Glue points worth flagging
+
+  - The Redis client is a single ioredis instance instantiated in
+  pkg/cache/redis.ts — same instance is reused by:
+    - @nestjs/cache-manager (UnifiedCacheInterceptor + IdempotencyInterceptor)
+  via @keyv/redis,
+    - core-events/core-events.consumer.ts for SETNX dedupe (uses a
+  RedisCacheProvider view of the same ioredis),
+    - websocket/ws.gateway.ts's @socket.io/redis-adapter (and a .duplicate() for
+   the subscriber).
+  - The KNEX_CONNECTION token now resolves to ShardedKnex ({ db, dbArchive,
+  pingAll }), not a raw Knex. This is a deliberate deviation from core. All
+  future repositories will type their constructor as @Inject('KNEX_CONNECTION')
+  private readonly knex: ShardedKnex and use
+  this.knex.db(region).transaction(...). CLAUDE.md §8 explicitly authorizes
+  this.
+  - The DatabaseLoggerService would normally write to a logs table — but Phase 0
+   has no migrations. The service still ships, but insertLogSafe is wrapped in a
+   try/catch that swallows the "relation does not exist" error so boot doesn't
+  break. This matches what the core service does (it already swallows DB
+  errors). I'll add a TODO comment.
+
+  Track B — core-service/backend/ files to create / edit
+
+  B.1 New migrations (under core-service/backend/src/database/migrations/)
+
+  - 20260418000001_seed_order_service_permissions.ts — adapted from
+  serviceBv2Core's version. Note: core's existing seed migration uses
+  core:product/core:branch resource naming but the plan + ref both want
+  unprefixed orders/payments/deliveries/finance. I'll keep the ref's naming
+  (matches the rbac.md doc).
+  - 20260418000002_create_events_outbox.ts — events_outbox table per spec.
+  - 20260418000003_add_delivery_fee_to_branches.ts — ALTER TABLE
+  restaurant_branches ADD COLUMN delivery_fee INT NOT NULL DEFAULT 0.
+
+  B.2 New code
+
+  - src/lib/middleware/guards/internal-api-key.guard.ts — @Injectable()
+  RequireInternalApiKeyGuard. Reads INTERNAL_API_KEY from ConfigService, plain
+  equality vs x-api-key header. Throws UnauthorizedException on mismatch,
+  ServiceUnavailableException if the secret isn't configured.
+  - src/lib/events/event-types.ts — EVENT_TYPES constants (copied verbatim from
+  ref).
+  - src/lib/events/types.ts — OutboxRow, InsertOutboxInput (copied).
+  - src/lib/events/outbox.repository.ts — @Injectable() Knex repo:
+  insertOutboxEvent(trx, input), claimBatch(trx, limit), markDispatched(trx,
+  id), markFailed(trx, id, err). Adapts the ref's module-level functions into a
+  Nest provider so services can inject it.
+  - src/lib/events/outbox-drain.service.ts — @Injectable(); drainOutbox() opens
+  a hot-Knex trx, claims a batch, publishes via
+  MessageBrokerService.publishConfirmed, marks dispatched/failed.
+  - src/pkg/messaging/message-broker.interface.ts — copied verbatim.
+  - src/pkg/messaging/rabbitmq.client.ts — copied verbatim (publisher-only
+  client).
+  - src/lib/events/messaging.module.ts — @Module exporting a single
+  MessageBrokerService (@Injectable Nest wrapper around RabbitMQClient).
+  OnModuleInit connects + declares exchange. OnApplicationShutdown closes.
+  - src/lib/events/events.module.ts — exposes OutboxRepository for service-layer
+   injection (@Global so any future service can inject it).
+  - src/worker.ts — separate process entry. Boots a minimal
+  NestFactory.createApplicationContext(WorkerModule), resolves
+  OutboxDrainService and MessageBrokerService, schedules drain via a simple
+  setInterval (not @nestjs/schedule's @Cron because the plan calls for croner
+  and per-second cadence; I'll use croner like the ref). On SIGTERM/SIGINT: stop
+   the cron, close broker, close DB.
+  - src/worker.module.ts — minimal module: ConfigModule.forRoot, DatabaseModule,
+   MessagingModule, EventsModule. No HTTP, no controllers.
+
+  B.3 Edits (existing files)
+
+  - src/lib/config/app.config.ts — add internal: { apiKey }, rabbit: { url,
+  exchange, drainCron, batchSize } blocks.
+  - package.json — add deps amqplib, amqp-connection-manager, croner. Add
+  scripts worker, worker:dev.
+
+  Track-specific touch points to highlight before I write
+
+  1. Logs table in Phase 0. Plan §0.4 says no migrations. Core's
+  LoggingInterceptor and DatabaseLoggerService write to a logs table. Proposal:
+  ship the services; the DB-write path silently no-ops until Phase 1's logs
+  migration. Console logging still works. If you'd rather I add a logs migration
+   in Phase 0 and call that an exception to §0.4, say so.
+  2. Idempotency DB-fallback. Same story — core's interceptor uses Redis only
+  (no DB fallback in the source we have). The plan says to disable the
+  DB-fallback hook until Phase 1. Since core's interceptor doesn't have one,
+  copying it as-is already satisfies that. I'll add a TODO marker for Phase 1 to
+   add the idempotency_keys table integration.
+  3. Permission resolution in PermissionsGuard. Core's guard injects
+  PermissionCacheService from app/rbac/. Order-service has no app/rbac/ yet.
+  Proposal: I'll write PermissionsGuard to inject a PermissionCacheService
+  interface token; in Phase 0 I'll provide a stub class that always returns true
+   for system_admin and otherwise denies (matching "deny on cache miss when
+  stale" semantics). Phase 1+ replaces the stub with a real implementation
+  backed by core-client/permission.client.ts. Alternatively I can defer the
+  guard entirely until Phase 1 — let me know.
+  4. WS auth token sources. The doc says cookie or ?token=. The ref drops
+  ?token= to avoid log leakage. I'll go with the doc (cookie + auth.token +
+  ?token= accepted), but note query-string is logged unless we configure access
+  logs to strip it. Speak up if you'd prefer the ref's stricter posture.
+  5. Sharded Knex provider as KNEX_CONNECTION. Reusing the same DI token as core
+   (CLAUDE.md §8 says to). The shape changes from raw Knex to ShardedKnex —
+  every future repo writes this.knex.db(region). This is the right call but
+  worth flagging since "import the token, get a different shape" can surprise
+  readers. I'll document this with a JSDoc on the provider.
+  6. No outbound events from order-service in Phase 0 — plan is clear; no
+  events_outbox here, no publisher service. The messaging.module.ts only wires
+  the consumer-side connection.
+
+  Order of writes (after you green-light)
+
+  1. Track B core-service deltas first (so the order-service Phase 0 acceptance
+  can plausibly run end-to-end against a real outbox).
+    a. Migrations (3 files).
+    b. internal-api-key.guard.ts.
+    c. pkg/messaging/*.
+    d. lib/events/* + messaging.module.ts + events.module.ts.
+    e. worker.module.ts + worker.ts.
+    f. app.config.ts edits + package.json edits.
+  2. Track A order-service from scratch.
+    a. package.json, tsconfig*.json, nest-cli.json, .env.example, knexfile.ts.
+    b. pkg/ (utils, cache, messaging interface + client).
+    c. lib/config, lib/context, lib/middleware/correlation, lib/filters,
+  lib/interceptors, lib/logging, lib/pagination, lib/decorators, lib/types,
+  lib/cache, lib/idempotency, lib/middleware/guards.
+    d. lib/sharding/*, lib/database.*.
+    e. lib/messaging/*, lib/core-events/*.
+    f. lib/core-client/*.
+    g. lib/websocket/*.
+    h. app/health/*.
+    i. app.module.ts, main.ts.
+
+  Out of scope for this work
+
+  - No npm install runs (Windows + offline-leaning environment; you can run
+  those after).
+  - No actual broker/Postgres/Redis tests — I'll verify by reading-only that
+  wiring compiles cleanly. I cannot prove acceptance criteria from §0 without a
+  running stack. I'll flag this when I'm done.
+  - No ultrareview/security-review/simplify runs.
+  - I won't touch serviceBv2/ or serviceBv2Core/.
+
+  ---
+  Decisions I need from you before I write code:
+  1. Logs table in Phase 0 — ship DatabaseLoggerService with a no-op DB write
+  (my preference), or add a logs migration as an exception? (my pick: no-op)
+  2. PermissionsGuard stub vs defer until Phase 1? (my pick: ship the guard with
+   a stubbed PermissionCacheService interface so later modules can decorate
+  routes today)
+  3. WS query-string token — accept ?token= (per docs) or reject (per ref)? (my
+  pick: per docs, accept)
+
+  Once you confirm or override, I'll start with Track B.
+
+✻ Cogitated for 4m 12s
+
+❯ for logs you can make one exception for only loggin so can finish it here adn
+    PermissionsGuard — OVERRIDE YOUR PICK. DEFER until Phase 1.
+     Don't ship a stub PermissionCacheService. We'll introduce the
+     guard alongside the permission cache when we have a real
+     implementation. Phase 0 controllers don't need @RequirePermissions
+     yet (only /api/health exists).
+
+  3. WS token sources — OVERRIDE YOUR PICK. Reject ?token= query
+     string (match the reference's stricter posture). Accept only:
+     - HttpOnly cookie
+     - socket.io auth.token field on handshake so execute plan
+
+● Decisions locked in. Starting with Track B (core-service prerequisites), then
+  Track A (order-service scaffold). Let me set up task tracking.
+● Starting with Track B. Three core-service migrations first.
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\database\migratio
+       ns\20260418000001_seed_order_service_permissions.ts)
+  ⎿  Wrote 60 lines to ..\core-service\backend\src\database\migrations\2026
+     0418000001_seed_order_service_permissions.ts
+       2 import type { Knex } from 'knex';
+       3 export async function up(knex: Knex): Promise<void> {
+       4   await knex.raw(`
+       5     INSERT INTO permissions (resource, action, created_at) VALUE
+         S
+       6       ('orders',     'read',          NOW()),
+       7       ('orders',     'accept',        NOW()),
+       8       ('orders',     'update',        NOW()),
+       9       ('orders',     'cancel',        NOW()),
+      10       ('payments',   'read',          NOW()),
+     … +53 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\database\migratio
+       ns\20260418000002_create_events_outbox.ts)
+  ⎿  Wrote 26 lines to ..\core-service\backend\src\database\migrations\2026
+     0418000002_create_events_outbox.ts
+       1 import type { Knex } from 'knex';
+       2
+       3 export async function up(knex: Knex): Promise<void> {
+       4   await knex.raw(`
+       5     CREATE TABLE events_outbox (
+       6       id              BIGSERIAL PRIMARY KEY,
+       7       aggregate_type  TEXT NOT NULL,
+       8       aggregate_id    TEXT NOT NULL,
+       9       event_type      TEXT NOT NULL,
+      10       event_id        UUID NOT NULL UNIQUE,
+     … +16 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\database\migratio
+       ns\20260418000003_add_delivery_fee_to_branches.ts)
+  ⎿  Wrote 14 lines to ..\core-service\backend\src\database\migrations\2026
+     0418000003_add_delivery_fee_to_branches.ts
+       2 import type { Knex } from 'knex';
+       3 // Flat per-branch delivery fee in minor units of the branch cur
+         rency.
+       4 // Read by order-service at checkout via GET /api/internal/branc
+         hes/:id.
+       6   await knex.raw(`ion up(knex: Knex): Promise<void> {
+       7     ALTER TABLE restaurant_branches
+       8     ADD COLUMN delivery_fee INT NOT NULL DEFAULT 0;
+       9   `);
+      10 }
+     … +7 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\middleware\gu
+       ards\internal-api-key.guard.ts)
+  ⎿  Wrote 31 lines to ..\core-service\backend\src\lib\middleware\guards\in
+     ternal-api-key.guard.ts
+       1 import {
+       2   CanActivate,
+       3   ExecutionContext,
+       4   Injectable,
+       5   ServiceUnavailableException,
+       6   UnauthorizedException,
+       7 } from '@nestjs/common';
+       8 import { ConfigService } from '@nestjs/config';
+       9 import { Request } from 'express';
+      10 import { GUARD_ERRORS } from './guard.constants';
+     … +24 lines (ctrl+o to expand)
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\middleware\g
+        uards\guard.constants.ts)
+  ⎿  Added 5 lines, removed 1 line
+       7    BRANCH_ACCESS_DENIED: 'You are not assigned to manage this sp
+          ecific branch',
+       8
+       9    // 🛡️ Dynamic Permission Error (Arrow function to handle the
+          variables!)
+      10 -  MISSING_PERMISSION: (resource: string, action: string) =>
+      10 +  MISSING_PERMISSION: (resource: string, action: string) =>
+      11      `Missing required permission: ${resource}:${action}`,
+      12 +
+      13 +  // 🛡️ Internal API key (service-to-service)
+      14 +  INVALID_INTERNAL_API_KEY: 'Invalid or missing internal API ke
+         +y',
+      15 +  INTERNAL_API_KEY_NOT_CONFIGURED: 'Internal API key is not con
+         +figured on the server',
+      16  };
+      17   No newline at end of file
+
+● Now the messaging package + outbox + worker on core-service.
+
+● Bash(mkdir -p "C:\Users\Zeyad
+      Rafat\Study\Projects\foodOrderApp\core-service\backend\src\pkg\messaging"
+      "C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\core-servic…)
+  ⎿  Done
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\pkg\messaging\mes
+       sage-broker.interface.ts)
+  ⎿  Wrote 10 lines to
+     ..\core-service\backend\src\pkg\messaging\message-broker.interface.ts
+       2   connect(): Promise<void>;oker {
+       3   close(): Promise<void>;
+       4   declareExchange(exchange: string): Promise<void>;
+       5   /**
+       6    * Publishes a message with publisher confirms. Resolves only
+       7    * broker has acked. Rejects on nack or connection loss.
+       8    */
+       9   publishConfirmed(exchange: string, routingKey: string, body: B
+         uffer): Promise<void>;
+      10 }
+     … +2 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\pkg\messaging\rab
+       bitmq.client.ts)
+  ⎿  Wrote 64 lines to
+     ..\core-service\backend\src\pkg\messaging\rabbitmq.client.ts
+      1 import amqp from 'amqp-connection-manager';
+      2 import type { AmqpConnectionManager, ChannelWrapper } from 'amqp-
+        connection-manager';
+      3 import type { ConfirmChannel } from 'amqplib';
+      4 import type { IMessageBroker } from './message-broker.interface';
+      5
+      6 export interface RabbitMQConfig {
+      7   url: string;
+      8   reconnectInitialMs?: number;
+      9 }
+     … +58 lines (ctrl+o to expand)
+
+● Now the lib/events files for core-service.
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\event-
+       types.ts)
+  ⎿  Wrote 14 lines to
+     ..\core-service\backend\src\lib\events\event-types.ts
+       2  * Canonical event-type constants. The order-service's bindings
+       3  * (`product.*`, `branch.*`, `restaurant.*`, `rbac.*`) must stay
+          in sync.
+       4  */
+       5 export const EVENT_TYPES = {
+       6   PRODUCT_STOCK_CHANGED: 'product.stock.changed',
+       7   PRODUCT_PRICE_CHANGED: 'product.price.changed',
+       8   BRANCH_UPDATED: 'branch.updated',
+       9   BRANCH_DEACTIVATED: 'branch.deactivated',
+      10   RESTAURANT_SUSPENDED: 'restaurant.suspended',
+     … +6 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\events
+       .types.ts)
+  ⎿  Wrote 16 lines to
+     ..\core-service\backend\src\lib\events\events.types.ts
+      1 export interface OutboxRow {
+      2   id: string;
+      3   aggregate_type: string;
+      4   aggregate_id: string;
+      5   event_type: string;
+      6   event_id: string;
+      7   payload: unknown;
+      8   attempts: number;
+      9 }
+     … +6 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\outbox
+       .repository.ts)
+  ⎿  Wrote 63 lines to
+     ..\core-service\backend\src\lib\events\outbox.repository.ts
+       1 import { Inject, Injectable } from '@nestjs/common';
+       2 import { Knex } from 'knex';
+       3 import { randomUUID } from 'crypto';
+       4 import { InsertOutboxInput, OutboxRow } from './events.types';
+       5
+       6 @Injectable()
+       7 export class OutboxRepository {
+       8   constructor(
+       9     @Inject('KNEX_CONNECTION') private readonly knex: Knex,
+      10   ) {}
+     … +62 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\messag
+       e-broker.service.ts)
+  ⎿  Wrote 57 lines to
+     ..\core-service\backend\src\lib\events\message-broker.service.ts
+       2   Injectable,
+       3   Logger,
+       4   OnApplicationShutdown,
+       5   OnModuleInit,
+       6 } from '@nestjs/common';
+       7 import { ConfigService } from '@nestjs/config';
+       8 import { RabbitMQClient } from '../../pkg/messaging/rabbitmq.cli
+         ent';
+       9
+      10 /**
+     … +58 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\outbox
+       -drain.service.ts)
+  ⎿  Wrote 92 lines to
+     ..\core-service\backend\src\lib\events\outbox-drain.service.ts
+       2 import { ConfigService } from '@nestjs/config';stjs/common';
+       3 import { Knex } from 'knex';
+       4 import { MessageBrokerService } from './message-broker.service';
+       6 import { OutboxRepository } from './outbox.repository';
+       7 /**
+       8  * One pass over events_outbox: claim a batch with FOR UPDATE SK
+       9  * publish each row to the exchange with publisher confirms, mar
+         k dispatched.
+      10  * On publish failure: mark the row failed (attempts+1) and bail
+          out of the
+     … +88 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\events
+       .module.ts)
+  ⎿  Wrote 18 lines to
+     ..\core-service\backend\src\lib\events\events.module.ts
+       2 import { MessageBrokerService } from './message-broker.service';
+       3 import { OutboxDrainService } from './outbox-drain.service';
+       4 import { OutboxRepository } from './outbox.repository';
+       6 /**
+       7  * Global module so any service-layer call site can inject `Outb
+         oxRepository`
+         n. to write an outbox row in the same DB trx as a domain mutatio
+       9  *
+      10  * The outbox is drained by a separate worker process (see `src/
+         worker.ts`).
+     … +13 lines (ctrl+o to expand)
+
+● Now the worker process. The plan says use croner. But since the API process's
+  app.module.ts doesn't yet import EventsModule and the worker is a separate
+  boot, I'll create a tiny WorkerModule.
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\worker.module.ts)
+  ⎿  Wrote 18 lines to ..\core-service\backend\src\worker.module.ts
+       2 import { ConfigModule } from '@nestjs/config';
+       3 import appConfig from './lib/config/app.config';
+       4 import { DatabaseModule } from './lib/database.module';
+       5 import { EventsModule } from './lib/events/events.module';
+       6
+       8  * Minimal module for the outbox worker process. No HTTP, no con
+         trollers, no
+       9  * scheduling here — `src/worker.ts` orchestrates the cron loop
+         directly.
+      10  */
+     … +10 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\worker.ts)
+  ⎿  Wrote 56 lines to ..\core-service\backend\src\worker.ts
+       2 import { ConfigService } from '@nestjs/config';
+       3 import { NestFactory } from '@nestjs/core';
+       4 import { Cron } from 'croner';
+       5 import { OutboxDrainService } from './lib/events/outbox-drain.se
+         rvice';
+       6 import { WorkerModule } from './worker.module';
+       7
+       8 /**
+       9  * Outbox worker — runs independently of the HTTP server.
+      10  *
+     … +55 lines (ctrl+o to expand)
+
+● Now extend core-service config and package.json. The EventsModule is @Global()
+   so service-layer code can inject OutboxRepository, but the API process won't
+  import it unless app.module.ts lists it. I'll add it to app.module.ts's
+  imports too — that way the API can register handlers in their own DB trx and
+  the worker drains them.
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\config\app.c
+        onfig.ts)
+  ⎿  Added 16 lines
+      32      fromEmail: process.env.MAILJET_FROM_EMAIL as string,
+      33      fromName: process.env.MAILJET_FROM_NAME as string,
+      34    },
+      35 +
+      36 +  // Shared secret for service-to-service HTTP calls (matched a
+         +gainst
+      37 +  // x-api-key header by RequireInternalApiKeyGuard).
+      38 +  internal: {
+      39 +    apiKey: process.env.INTERNAL_API_KEY as string,
+      40 +  },
+      41 +
+      42 +  // RabbitMQ — outbox worker publishes core.events here (consu
+         +med by
+      43 +  // order-service for cache invalidation).
+      44 +  rabbit: {
+      45 +    url: process.env.RABBITMQ_URL as string,
+      46 +    exchange: process.env.RABBITMQ_CORE_EVENTS_EXCHANGE || 'cor
+         +e.events',
+      47 +    drainCron: process.env.OUTBOX_DRAIN_CRON || '* * * * * *',
+      48 +    batchSize: parseInt(process.env.OUTBOX_BATCH_SIZE || '50',
+         +10),
+      49 +  },
+      50  });
+      51 +
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\app.module.ts)
+  ⎿  Added 1 line
+      31  import { ProductModule } from './app/product/product.module';
+      32  import { RbacModule } from './app/rbac/rbac.module';
+      33  import { EmailModule } from './lib/email/email.module';
+      34 +import { EventsModule } from './lib/events/events.module';
+      35
+      36  @Module({
+      37    imports: [
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\app.module.ts)
+  ⎿  Added 2 lines, removed 1 line
+      70      BranchModule,
+      71      ProductModule,
+      72      RbacModule,
+      73 -
+      73 +
+      74      EmailModule,
+      75 +    EventsModule,
+      76      // Add your new domain modules (Users, Orders, etc.) here a
+          s you build them
+      77    ],
+      78    controllers: [],
+
+● Now package.json deps + worker scripts:
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 3 lines, removed 1 line
+      25      "test:e2e:cov": "jest --config ./test/jest-e2e.json --cover
+          age",
+      26      "test:e2e:debug": "node --inspect-brk -r tsconfig-paths/reg
+          ister -r ts-node/register node_modules/.bin/jest --config ./tes
+          t/jest-e2e.json --runInBand",
+      27      "test:all": "npm run test && npm run test:e2e",
+      28 -    "test:db:setup": "npm run db:clear && npm run seed:demo"
+      28 +    "test:db:setup": "npm run db:clear && npm run seed:demo",
+      29 +    "worker": "node dist/worker",
+      30 +    "worker:dev": "ts-node-dev -r tsconfig-paths/register src/w
+         +orker.ts"
+      31    },
+      32    "dependencies": {
+      33      "@keyv/redis": "^5.1.6",
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 2 lines
+      46      "@nestjs/typeorm": "^10.0.2",
+      47      "@nestjs/websockets": "^10.4.19",
+      48      "@types/cors": "^2.8.19",
+      49 +    "amqp-connection-manager": "^4.1.14",
+      50 +    "amqplib": "^0.10.4",
+      51      "bcrypt": "^6.0.0",
+      52      "bcryptjs": "^3.0.3",
+      53      "cache-manager": "^7.2.8",
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 1 line
+      56      "cloudinary": "^2.7.0",
+      57      "cookie-parser": "^1.4.7",
+      58      "cors": "^2.8.6",
+      59 +    "croner": "^9.0.0",
+      60      "date-fns": "^4.1.0",
+      61      "dotenv": "^16.4.7",
+      62      "handlebars": "^4.7.8",
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 1 line
+      83      "@nestjs/cli": "^10.0.0",
+      84      "@nestjs/schematics": "^10.0.0",
+      85      "@nestjs/testing": "^10.0.0",
+      86 +    "@types/amqplib": "^0.10.5",
+      87      "@types/bcrypt": "^5.0.2",
+      88      "@types/cookie-parser": "^1.4.10",
+      89      "@types/express": "^5.0.0",
+
+● Track B done. Moving to Track A — order-service from scratch.
+
+● Write(package.json)
+  ⎿  Wrote 98 lines to package.json
+       2   "name": "order-service",
+       3   "version": "0.0.1",
+       4   "description": "QuickBite — orders, payments, deliveries, rest
+         aurant finance",
+       5   "private": true,
+       7   "scripts": {UNLICENSED",
+       8     "build": "nest build",
+       9     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"
+         ",
+      10     "start": "nest start",
+     … +90 lines (ctrl+o to expand)
+
+● Write(tsconfig.json)
+  ⎿  Wrote 21 lines to tsconfig.json
+       1 {
+       2   "compilerOptions": {
+       3     "module": "commonjs",
+       4     "declaration": true,
+       5     "removeComments": true,
+       6     "emitDecoratorMetadata": true,
+       7     "experimentalDecorators": true,
+       8     "allowSyntheticDefaultImports": true,
+       9     "esModuleInterop": true,
+      10     "target": "ES2021",
+     … +11 lines (ctrl+o to expand)
+
+● Write(tsconfig.build.json)
+  ⎿  Wrote 4 lines to tsconfig.build.json
+      1 {
+      2   "extends": "./tsconfig.json",
+      3   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+      4 }
+
+● Write(nest-cli.json)
+  ⎿  Wrote 10 lines to nest-cli.json
+       1 {
+       2   "$schema": "https://json.schemastore.org/nest-cli",
+       3   "collection": "@nestjs/schematics",
+       4   "sourceRoot": "src",
+       5   "compilerOptions": {
+       6     "deleteOutDir": true,
+       7     "plugins": ["@nestjs/swagger"],
+       8     "watchAssets": true
+       9   }
+      10 }
+
+● Write(.env.example)
+  ⎿  Wrote 76 lines to .env.example
+       2 PORT=4000development
+       3
+       4 # JWTs — secrets MUST match core-service so cross-issued tokens
+         verify
+       5 ACCESS_SECRET=changeme
+       6 REFRESH_SECRET=changeme
+       7 ACCESS_EXPIRES_IN=3600
+       8 REFRESH_EXPIRES_IN=604800
+       9
+      10 CORS_ORIGINS=http://localhost:3000
+     … +68 lines (ctrl+o to expand)
+
+● Write(.gitignore)
+  ⎿  Wrote 11 lines to .gitignore
+       1 node_modules/
+       2 dist/
+       3 coverage/
+       4 .env
+       5 .env.local
+       6 .env.*.local
+       7 *.log
+       8 .DS_Store
+       9 .idea/
+      10 .vscode/
+     … +1 line (ctrl+o to expand)
+
+● Write(knexfile.ts)
+  ⎿  Wrote 60 lines to knexfile.ts
+       2 import type { Knex } from 'knex';rom 'dotenv';
+       3
+       4 loadDotenv();
+       5
+       6 /**
+          vars.lds a knex config for the region+cluster identified by env
+       8  *   REGION=eg|ksa|...    (required — never default, so migratio
+         ns can't silently
+       9  *                          run against the wrong shard)
+      10  *   CLUSTER=hot|archive  (defaults to "hot")
+     … +56 lines (ctrl+o to expand)
+
+● Now pkg/. Framework-agnostic, no NestJS imports.
+
+● Bash(mkdir -p "C:\Users\Zeyad
+      Rafat\Study\Projects\foodOrderApp\order-service\src\pkg\cache"
+      "C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\order-service\src\pkg\…)
+  ⎿  Done
+
+● Write(src\pkg\utils\time.utils.ts)
+  ⎿  Wrote 16 lines to src\pkg\utils\time.utils.ts
+       1 type TimeUnit = 'd' | 'h' | 'm' | 's';
+       2
+       3 const multipliers: Record<TimeUnit, number> = {
+       4   s: 1000,
+       5   m: 60 * 1000,
+       6   h: 60 * 60 * 1000,
+       7   d: 24 * 60 * 60 * 1000,
+       8 };
+       9
+      10 export function toMs(value: number, unit: TimeUnit): number {
+     … +6 lines (ctrl+o to expand)
+
+● Write(src\pkg\utils\money.ts)  ⎿  Wrote 20 lines to src\pkg\utils\money.ts
+       1 // All money in this service is expressed as INT minor units
+       2 // (piasters, halalas). Display formatting is the client's job.
+       3
+       4 export function toMinor(majorUnits: number): number {
+       5   return Math.round(majorUnits * 100);
+       6 }
+       7
+       8 export function fromMinor(minor: number): number {
+       9   return minor / 100;
+      10 }
+     … +11 lines (ctrl+o to expand)
+
+● Write(src\pkg\utils\retry.ts)
+  ⎿  Wrote 24 lines to src\pkg\utils\retry.ts
+       2   attempts: number; // total tries including the first
+       3   initialDelayMs: number;
+       4   maxDelayMs: number;
+       5   isRetryable?: (err: unknown) => boolean;
+       6 }
+       7
+       8 export async function retry<T>(fn: () => Promise<T>, opts: Retry
+         Options): Promise<T> {
+       9   let delay = opts.initialDelayMs;
+      10   let lastErr: unknown;
+     … +15 lines (ctrl+o to expand)
+
+● Write(src\pkg\cache\cache.interface.ts)
+  ⎿  Wrote 11 lines to src\pkg\cache\cache.interface.ts
+       2   get(key: string): Promise<string | null>;
+       3   set(key: string, value: string, ttlSeconds?: number): Promise<
+         void>;
+       5   del(key: string): Promise<number>;
+       6   /**
+       7    * Atomic "set if absent". Returns true if the key was newly s
+       8    * it already existed. Used for dedupe and distributed locks.
+       9    */
+      10   trySet(key: string, value: string, ttlSeconds?: number): Promi
+         se<boolean>;
+     … +4 lines (ctrl+o to expand)
+
+● Write(src\pkg\cache\redis.ts)
+  ⎿  Wrote 35 lines to src\pkg\cache\redis.ts
+       2 import type { ICacheProvider } from './cache.interface';
+       3
+       4 export class RedisCacheProvider implements ICacheProvider {
+       6    * Exposed so integrations that need the raw ioredis connectio
+         n (e.g. the
+       7    * socket.io redis adapter) can reuse it instead of opening an
+       8    * The adapter still needs a separate subscriber via `client.d
+         uplicate()` —
+       9    * once ioredis is in subscribe mode it can't serve get/set.
+      10    */
+     … +30 lines (ctrl+o to expand)
+
+● Write(src\pkg\messaging\message-broker.interface.ts)
+  ⎿  Wrote 26 lines to src\pkg\messaging\message-broker.interface.ts
+       1 export interface ConsumeMessage {
+       2   routingKey: string;
+       3   body: Buffer;
+       4   ack(): void;
+       5   nack(requeue?: boolean): void;
+       6 }
+       7
+       8 export interface ConsumerOptions {
+       9   queue: string;
+      10   exchange: string;
+     … +17 lines (ctrl+o to expand)
+
+● Write(src\pkg\messaging\rabbitmq\rabbitmq.types.ts)
+  ⎿  Wrote 5 lines to src\pkg\messaging\rabbitmq\rabbitmq.types.ts
+      1 export interface RabbitMQConfig {
+      2   url: string;
+      3   reconnectInitialMs: number; // first backoff, doubles up to rec
+        onnectMaxMs
+      4   reconnectMaxMs: number;
+      5 }
+
+● Write(src\pkg\messaging\rabbitmq\rabbitmq.client.ts)
+  ⎿  Wrote 140 lines to src\pkg\messaging\rabbitmq\rabbitmq.client.ts
+       1 import amqp from 'amqp-connection-manager';
+       2 import type {
+       3   AmqpConnectionManager,
+       4   ChannelWrapper,
+       5 } from 'amqp-connection-manager';
+       6 import type {
+       7   ConfirmChannel,
+       8   ConsumeMessage as AmqpConsumeMessage,
+       9 } from 'amqplib';
+      10 import type {
+     … +142 lines (ctrl+o to expand)
+
+● Write(src\pkg\payments\payment.interface.ts)
+  ⎿  Wrote 52 lines to src\pkg\payments\payment.interface.ts
+       2  * Provider-agnostic payment surface. Concrete providers (Kashie
+         r today, Stripe
+       3  * tomorrow) implement this interface in their own files under
+         whicheverayments/<provider>/`. The Phase 2 payment module wires
+       5  * provider is configured into a NestJS service.
+       6  *
+         ions yet.0 declares the interface only — no provider implementat
+       8  */
+       9
+      10 export interface CreateSessionInput {
+     … +46 lines (ctrl+o to expand)
+
+● Now lib/ core. Start with the config factory.
+
+● Bash(mkdir -p "C:\Users\Zeyad
+      Rafat\Study\Projects\foodOrderApp\order-service\src\lib\config"
+      "C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\order-service\src\lib…)
+  ⎿  Done
+
+● Write(src\lib\config\app.config.ts)
+  ⎿  Wrote 150 lines to src\lib\config\app.config.ts
+      2  * Typed config tree. Loaded once via `ConfigModule.forRoot({ isG
+        lobal: true,
+        get(...)`.appConfig] })`. Read at runtime through `ConfigService.
+      4  *
+        ach region thes the source of truth for which shards exist. For e
+      6  * factory reads `DB_<region>_*` (hot cluster) and `ARCHIVE_DB_<r
+      7  * env vars and builds the per-region triples. The sharded Knex p
+        rovider in
+        ls per region.se.providers.ts` consumes these to lazily build poo
+      9  */
+     … +161 lines (ctrl+o to expand)
+
+● Write(src\lib\context\request-context.service.ts)
+  ⎿  Wrote 16 lines to src\lib\context\request-context.service.ts
+       2 import { AsyncLocalStorage } from 'async_hooks';
+       3
+       4 @Injectable()
+       5 export class RequestContextService {
+       6   private static readonly storage = new AsyncLocalStorage<Map<st
+       7 ring, string>>();
+       8   run(correlationId: string, callback: () => void) {
+       9     const store = new Map<string, string>().set('correlationId',
+          correlationId);
+      10     RequestContextService.storage.run(store, callback);
+     … +9 lines (ctrl+o to expand)
+
+● Write(src\lib\middleware\correlation.middleware.ts)
+  ⎿  Wrote 21 lines to src\lib\middleware\correlation.middleware.ts
+       2 import { Request, Response, NextFunction } from 'express';';
+       3 import { v4 as uuidv4 } from 'uuid';
+       4 import { RequestContextService } from '../context/request-contex
+         t.service';
+       5
+       7 export class CorrelationMiddleware implements NestMiddleware {
+       8   constructor(private readonly context: RequestContextService) {
+         }
+       9
+      10   use(req: Request, res: Response, next: NextFunction) {
+     … +12 lines (ctrl+o to expand)
+
+● Write(src\lib\filters\http-exception.filter.ts)
+  ⎿  Wrote 47 lines to src\lib\filters\http-exception.filter.ts
+       2   ArgumentsHost,
+       3   Catch,
+       4   ExceptionFilter,
+       5   HttpException,
+       6   HttpStatus,
+       7   Logger,
+       8 } from '@nestjs/common';
+       9 import { Response } from 'express';
+      10 import { RequestContextService } from '../context/request-contex
+         t.service';
+     … +40 lines (ctrl+o to expand)
+
+● Write(src\lib\filters\database-error.filter.ts)
+  ⎿  Wrote 95 lines to src\lib\filters\database-error.filter.ts
+      1 import {
+      2   ArgumentsHost,
+      3   Catch,
+      4   ExceptionFilter,
+      5   HttpException,
+      6   HttpStatus,
+      7   Logger,
+      8 } from '@nestjs/common';
+      9 import { Response } from 'express';
+     … +90 lines (ctrl+o to expand)
+
+● Write(src\lib\interceptors\success.interceptor.ts)
+  ⎿  Wrote 31 lines to src\lib\interceptors\success.interceptor.ts
+       1 import {
+       2   CallHandler,
+       3   ExecutionContext,
+       4   Injectable,
+       5   NestInterceptor,
+       6 } from '@nestjs/common';
+       7 import { Observable } from 'rxjs';
+       8 import { map } from 'rxjs/operators';
+       9
+      10 @Injectable()
+     … +23 lines (ctrl+o to expand)
+
+● Write(src\lib\logging\log.interface.ts)
+  ⎿  Wrote 18 lines to src\lib\logging\log.interface.ts
+       1 export interface Log {
+       2   id?: number;
+       3   timestamp?: Date;
+       4   level?: string;
+       5   correlationId?: string;
+       6   packetType: string;
+       7   userId?: number;
+       8   ipAddress?: string;
+       9   userAgent?: string;
+      10   action: string;
+     … +8 lines (ctrl+o to expand)
+
+● Write(src\lib\logging\database-logger.service.ts)
+  ⎿  Wrote 87 lines to src\lib\logging\database-logger.service.ts
+         js/common';ject, Injectable, Logger, LoggerService } from '@nest
+       2 import { Log } from './log.interface';
+       4 import { ShardedKnex } from '../sharding/shards';
+       5 /**
+       6  * Writes a row per request to the per-region `logs` table on th
+       7  * resolved region (falls back to the first configured region fo
+         r system-level
+         nal; DB writest a request context). Console output is unconditio
+       9  * are best-effort and never crash the app.
+      10  */
+     … +86 lines (ctrl+o to expand)
+
+● Write(src\lib\logging\logging.interceptor.ts)
+  ⎿  Wrote 56 lines to src\lib\logging\logging.interceptor.ts
+       2   CallHandler,
+       3   ExecutionContext,
+       4   Injectable,
+       5   NestInterceptor,
+       6 } from '@nestjs/common';
+       7 import { Observable, tap } from 'rxjs';
+       8 import { catchError } from 'rxjs/operators';
+       9 import { Request } from 'express';
+      10 import { DatabaseLoggerService } from './database-logger.service
+         ';
+     … +49 lines (ctrl+o to expand)
+● Write(src\lib\pagination\cursor-pagination.ts)
+  ⎿  Wrote 100 lines to src\lib\pagination\cursor-pagination.ts
+      1 import { Knex } from 'knex';
+      2
+      3 export interface PaginationParams {
+      4   cursor?: string;
+      5   limit: number;
+      6   sortBy: string; // mapped (snake_case) for the DB
+      7   apiSortBy: string; // original (camelCase) for the client
+      8   sortOrder: 'asc' | 'desc';
+      9 }
+     … +93 lines (ctrl+o to expand)
+
+● Write(src\lib\pagination\query-parser.ts)
+  ⎿  Wrote 48 lines to src\lib\pagination\query-parser.ts
+         ion';t { PaginationParams, FilterParams } from './cursor-paginat
+       2
+       3 export function parsePaginationQuery(
+       4   query: Record<string, any>,
+       5   columnMap: Record<string, string> = {},
+       6 ): PaginationParams {
+       7   const rawSortBy = (query.sortBy as string) || 'id';
+       8
+       9   return {
+      10     cursor: query.cursor as string,
+     … +41 lines (ctrl+o to expand)
+
+● Write(src\lib\decorators\permissions.decorator.ts)
+  ⎿  Wrote 15 lines to src\lib\decorators\permissions.decorator.ts
+       2 import { SetMetadata } from '@nestjs/common';
+       3 export const PERMISSIONS_KEY = 'permissions';
+       4
+       5 /**
+       6  * Tag a route with the permission required to invoke it. Consum
+       7  * `PermissionsGuard` (which lands in Phase 1 alongside the perm
+         ission cache).
+       8  *
+       9  *   @RequirePermissions('orders', 'accept')
+      10  */
+     … +8 lines (ctrl+o to expand)
+
+● Write(src\lib\types\express.d.ts)
+  ⎿  Wrote 22 lines to src\lib\types\express.d.ts
+       1 declare namespace Express {
+       2   interface Request {
+       3     /** JWT payload decoded by JwtAuthGuard. */
+       4     user?: {
+       5       userId: number;
+       6       role: string;
+       7       email: string;
+       8       restaurantId?: number;
+       9       restaurantRole?: string;
+      10       branchIds?: number[];
+     … +15 lines (ctrl+o to expand)
+
+● Now the cache + idempotency interceptors (copied from core verbatim with
+  order-service tweaks):
+
+● Write(src\lib\cache\cache-scope.decorator.ts)
+  ⎿  Wrote 4 lines to src\lib\cache\cache-scope.decorator.ts
+      1 import { SetMetadata } from '@nestjs/common';
+      2
+      3 export const CacheScope = (scope: 'PUBLIC' | 'PRIVATE') =>
+      4   SetMetadata('cache_scope', scope);
+
+● Write(src\lib\cache\cache.interceptor.ts)
+  ⎿  Wrote 91 lines to src\lib\cache\cache.interceptor.ts
+       1 import {
+       2   CallHandler,
+       3   ExecutionContext,
+       4   Inject,
+       5   Injectable,
+       6 } from '@nestjs/common';
+       7 import {
+       8   CACHE_MANAGER,
+       9   CACHE_TTL_METADATA,
+      10   CacheInterceptor,
+     … +86 lines (ctrl+o to expand)
+
+● Write(src\lib\idempotency\idempotency.decorator.ts)
+  ⎿  Wrote 10 lines to src\lib\idempotency\idempotency.decorator.ts
+       2 import { SetMetadata } from '@nestjs/common';
+       3 export interface IdempotencyOptions {
+       4   strict?: boolean;
+       5 }
+       6
+       7 export const IDEMPOTENCY_KEY_METADATA = 'idempotency_options';
+       8
+       9 export const Idempotency = (options: IdempotencyOptions = { stri
+         ct: false }) =>
+      10   SetMetadata(IDEMPOTENCY_KEY_METADATA, options);
+     … +1 line (ctrl+o to expand)
+
+● Write(src\lib\idempotency\idempotency.interceptor.ts)
+  ⎿  Wrote 105 lines to src\lib\idempotency\idempotency.interceptor.ts
+       1 import {
+       2   BadRequestException,
+       3   CallHandler,
+       4   ConflictException,
+       5   ExecutionContext,
+       6   Inject,
+       7   Injectable,
+       8   NestInterceptor,
+       9   ServiceUnavailableException,
+      10 } from '@nestjs/common';
+     … +104 lines (ctrl+o to expand)
+
+● Now the guards. Per user instruction, defer PermissionsGuard until Phase 1 —
+  don't ship it. Ship the rest.
+
+● Write(src\lib\middleware\guards\guard.constants.ts)
+  ⎿  Wrote 11 lines to src\lib\middleware\guards\guard.constants.ts
+       2   UNAUTHENTICATED: 'User not authenticated',
+       3   TOKEN_EXPIRED: 'Token expired or invalid',
+       4   WORKSPACE_ACCESS_DENIED:
+       5     'You do not have access to this restaurant workspace',
+       6   BRANCH_ACCESS_DENIED:
+       7     'You are not assigned to manage this specific branch',
+       8   INVALID_INTERNAL_API_KEY: 'Invalid or missing internal API key
+         ',
+       9   INTERNAL_API_KEY_NOT_CONFIGURED:
+      10     'Internal API key is not configured on the server',
+     … +1 line (ctrl+o to expand)
+  ⎿  You've hit your limit · resets 7:20am (Africa/Cairo)
+     /upgrade to increase your usage limit.
+
+✻ Baked for 9m 56s
+❯ First, read CLAUDE.md and all files in docs/ to get full context.             
+                                                                                
+  Second, implement Phase 0 from docs/implementation-plan.md.                   
+                                                                                
+  During implementation, you can reference these two folders as                 
+  examples of the same Phase 0 already implemented:                             
+  - ../serviceBv2      → order-service version                                  
+  - ../serviceBv2Core  → core-service version                                   
+                                                                                
+  These are reference implementations. The technology, structure, and           
+  some details differ from our project — so don't copy blindly. Adapt           
+  them to match OUR conventions (the ones in CLAUDE.md and core-service).       
+                                                                                
+  Apply Phase 0 in two places:                                                  
+  - This project (order-service)                                                
+  - ../core-service (the prerequisites in section 0.5)                          
+                                                                                
+  Make a plan first and show it to me before writing code. go                   
+
+  Read 41 files, listed 12 directories (ctrl+o to expand)
+
+● Now let me look at reference implementations for the order-service-specific
+  infra (sharding, messaging, websocket, core-events, core-client):
+
+  Read 20 files, listed 5 directories (ctrl+o to expand)
+  ⎿  You've hit your limit · resets 2:20am (Africa/Cairo)
+     /upgrade to increase your usage limit.
+
+✻ Cogitated for 4m 18s
+
+❯ now you should continue work but before that ask me for read/write/edit       
+  permissions on order service and all folders beside it so you ask me many     
+  times                                                                         
+
+● I need read/write/edit access to do this work. Specifically, please grant
+  permissions for:
+
+  1. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\order-service\ — the
+  primary working directory. I need to read everything (CLAUDE.md, all docs/,
+  reference my place) and write the entire Phase 0 scaffold (src/, package.json,
+   tsconfig.json, nest-cli.json, knexfile.ts, .env.example, etc.).
+  2. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\core-service\ — to read
+  existing patterns (already partly done) and to write Phase 0.5 prerequisites:
+  a new RBAC permissions seed migration, the restaurant_branches.delivery_fee
+  migration, the internal-api-key.guard.ts, the new INTERNAL_API_KEY env in
+  app.config.ts, the events_outbox migration, the outbox dispatcher worker
+  (src/lib/events/, src/worker.ts), and outbox env entries.
+  3. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\serviceBv2\ and
+  C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\serviceBv2Core\ — read-only.
+  I won't modify these; I just need to keep reading them as references.
+  4. C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\ (parent) — read-only
+  listing access so I can navigate between the four folders.
+
+  Concretely, please pre-approve (or select "always allow"):
+  - Read on any file under foodOrderApp\**
+  - Glob / Grep / Bash ls on any folder under foodOrderApp\**
+  - Write and Edit on any file under foodOrderApp\order-service\** and
+  foodOrderApp\core-service\**
+
+  That should cut the prompt count down to near-zero for the rest of the work.
+  Once you confirm, I'll finish reading the remaining reference files and
+  present the plan before writing any code.
+
+✻ Churned for 14s
+
+❯ Approved. Grant yourself:                                                     
+  - Read/Glob/Grep/Bash ls everywhere under foodOrderApp\**                     
+  - Write/Edit on order-service\** and core-service\**                          
+  - Read-only on serviceBv2\** and serviceBv2Core\**                            
+                                                                                
+  Don't write anywhere outside order-service\ and core-service\.                
+  Use /permissions internally to set these up, then proceed                     
+
+● Permissions noted — I'll proceed. (FYI /permissions is a built-in slash
+  command the user invokes; I can't invoke it from here. Your verbal approval is
+   what I'll act on.)
+
+  Continuing the recon before drafting the plan.
+
+  Read 2 files, listed 3 directories (ctrl+o to expand)
+
+❯ /permissions 
+  ⎿  Permissions dialog dismissed
+
+❯ continue work                                                                 
+
+  Read 19 files, listed 4 directories (ctrl+o to expand)
+
+● Now let me look at remaining order-service docs and check the existing state
+  of order-service / core-service files I might modify:
+
+  Read 3 files, listed 5 directories (ctrl+o to expand)
+
+● I have enough context. Let me also peek at what serviceBv2Core does for the
+  internal-api-key guard (since it may not be Nest, but principles still
+  useful), and the core-service index file structure.
+
+  Read 2 files, listed 4 directories (ctrl+o to expand)
+
+● Now I have full context. Time to lay out the plan. Let me verify the
+  core-service package.json doesn't already have the deps we'd need:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good. I have a full picture. Here is the plan.
+
+  ---
+  Phase 0 Implementation Plan
+
+  Scope
+
+  Two parallel build tracks:
+  - Track A — order-service/: NestJS 10 scaffold from scratch. No domain
+  modules. All cross-cutting infra (sharded Knex, Redis cache, AMQP consumer, WS
+   gateway, core-client base, idempotency, logging, correlation, sharding,
+  health) installed and wired so Phase 1+ only writes business code.
+  - Track B — core-service/backend/: Phase 0.5 prerequisites layered on the
+  existing Nest app — new permissions seed, delivery_fee column, events_outbox
+  table, internal-api-key guard, transactional outbox dispatcher, and a separate
+   worker process.
+
+  Key adaptations from the references
+
+  - serviceBv2 and serviceBv2Core use raw Express + TSyringe. We don't copy
+  that. We adapt their infra logic (Rabbit client, sharded Knex resolver, region
+   resolver semantics, core-events consumer flow, WS handshake, outbox drain)
+  into NestJS-native shapes (modules, providers, @Injectable, OnModuleInit /
+  OnApplicationShutdown) following core-service/backend/'s exact conventions.
+  - pkg/ files copied largely verbatim (they're already framework-agnostic).
+  - Where serviceBv2's implementation uses an AppError class, we use NestJS's
+  BadRequestException/UnauthorizedException/ServiceUnavailableException etc.,
+  per CLAUDE.md §10.
+  - Region resolver: per CLAUDE.md §8 it's middleware, per implementation-plan
+  §0.3 it reads X-Region only (no path/query/cookie/JWT fallback). I'll go with
+  the plan's stricter rule.
+  - Idempotency: copied from core verbatim — DB-fallback hook stays disabled
+  until Phase 1 lands the idempotency_keys table.
+  - Logging: copied from core. The logs table migration moves into order-service
+   migrations even though no other Phase 0 migration is created (CLAUDE.md and
+  the implementation-plan §0.4 say "no migrations in Phase 0"). Decision: I'll
+  skip the logs-table migration in Phase 0 to honor §0.4 strictly, and disable
+  the DB write path (log to console only) until Phase 1 ships a logs migration.
+  Will flag this for your call.
+  - WS: @nestjs/websockets + @nestjs/platform-socket.io +
+  @socket.io/redis-adapter, gateway with afterInit adapter install,
+  handleConnection JWT verify + room joins, WsPublisher provider. Token via
+  auth.token or cookie (per ref) — query-string omitted because of log leakage;
+  doc-string says cookie/?token=, but ref's reasoning is correct. I'll match the
+   ref (cookie + auth.token).
+  - Health: NestJS @nestjs/terminus plus a pingAll() shard fan-out (uses
+  KNEX_CONNECTION provider's pingAll).
+  - Core-client base: NestJS @Injectable provider exposing a request<T>()
+  method. Retry via pkg/utils/retry.ts. Forwards X-CorrelationId from
+  RequestContextService. Translates non-2xx to NestJS HttpException subclasses
+  (no custom AppError).
+  - AMQP module: single shared RabbitMQClient connection (auto-reconnect via
+  amqp-connection-manager), opened in OnModuleInit, closed in
+  OnApplicationShutdown.
+  - Core-events consumer: Nest module whose OnModuleInit declares topology,
+  registers consumer, dispatches via a handler registry. Registry exposes a
+  register(eventType, handler) API for later phases. Phase 0 starts empty.
+  - DI strategy: Knex provider stays under the same KNEX_CONNECTION token
+  (matches core), but the value is { db(region), dbArchive(region), pingAll() }
+  — the sharded resolver (CLAUDE.md §8). Repos in later phases will inject and
+  call this.knex.db(region) rather than the bare Knex.
+
+  Track A — order-service/ files to create
+
+  A.1 Project bootstrap
+
+  - package.json — NestJS 10 deps (mirrors core-service/backend/package.json
+  minus what we don't use: drop
+  typeorm/mysql2/cloudinary/puppeteer/handlebars/mailjet) plus amqplib,
+  amqp-connection-manager, socket.io, @socket.io/redis-adapter, ioredis,
+  @nestjs/websockets, @nestjs/platform-socket.io. Scripts: start, start:dev,
+  build, migrate, migrate:rollback, lint, test.
+  - tsconfig.json, tsconfig.build.json — copy core verbatim.
+  - nest-cli.json — copy core minus the swagger plugin/hbs assets we don't need
+  yet.
+  - .env.example — every var from §0.1 of the plan, no secrets.
+  - knexfile.ts at repo root — region-aware (reads REGION + optional
+  CLUSTER=hot|archive env vars), per the plan.
+
+  A.2 Source tree (under order-service/src/)
+
+  main.ts                                      bootstrap
+  app.module.ts                                root module
+  lib/
+    config/app.config.ts                       @nestjs/config factory; parses
+  REGIONS, builds per-region DB triples (hot+archive)
+    context/request-context.service.ts         AsyncLocalStorage (correlationId)
+    middleware/correlation.middleware.ts       x-correlation-id → ALS
+    filters/http-exception.filter.ts           global error envelope
+    filters/database-error.filter.ts           PG SQLSTATE → HTTP
+    interceptors/success.interceptor.ts        global response envelope
+  (auto-hoists meta)
+    logging/{database-logger.service,log.interface,logging.interceptor}.ts
+                                                copied; DB write path no-op
+  until logs migration ships
+    pagination/{query-parser,cursor-pagination}.ts
+                                                copied verbatim from core
+    decorators/permissions.decorator.ts        @RequirePermissions
+    cache/cache.interceptor.ts                 UnifiedCacheInterceptor (copied)
+    cache/cache-scope.decorator.ts             @CacheScope
+    idempotency/{idempotency.interceptor,idempotency.decorator}.ts
+                                                copied; DB fallback disabled
+    middleware/guards/jwtGuard.ts              cookie access_token → req.user
+  (jwt.verify with ACCESS_SECRET from config)
+    middleware/guards/permissions.guard.ts     reflector-based; resolves perms
+  via PermissionCacheService injected in later phases
+                                                (Phase 0: stub interface — only
+  the guard class lands)
+    middleware/guards/restaurant-member.guard.ts  copied
+    middleware/guards/branch-access.guard.ts   copied
+    middleware/guards/internal-api-key.guard.ts  NEW vs core — plain x-api-key
+  equality
+    middleware/guards/guard.constants.ts       error dict
+    types/express.d.ts                         augments Request with user? +
+  region? + correlationId?
+    database.module.ts                         @Global() module
+    database.providers.ts                      KNEX_CONNECTION → ShardedKnex
+  resolver (db, dbArchive, pingAll)
+    database.service.ts                        OnApplicationShutdown — destroys
+  every per-region pool
+    sharding/sharding.module.ts                exposes regions list
+    sharding/regions.ts                        canonical list helpers (isRegion,
+   assertRegion)
+    sharding/region-resolver.middleware.ts     X-Region only; sets req.region
+  (or "all"); throws BadRequestException only when consumed by an explicit guard
+   later — Phase 0 just resolves
+    sharding/shards.ts                         lazy Map<region, Knex> for
+  hot+archive
+    core-client/core-client.module.ts          @Module, exports CoreHttpClient
+    core-client/core.http-client.ts            base wrapper: fetch + retry +
+  correlation forwarding + error translation
+    messaging/messaging.module.ts              @Global() — wraps the pkg client;
+   OnModuleInit/OnApplicationShutdown
+    messaging/amqp.connection.ts               @Injectable provider — single
+  shared RabbitMQClient
+    core-events/core-events.module.ts          @Module; provides + registers
+  handler registry
+    core-events/core-events.consumer.ts        @Injectable; OnModuleInit
+  declares topology + starts consume loop
+    core-events/types.ts                       envelope + handler types
+    core-events/handler-registry.service.ts    register/lookup; injectable into
+  later modules
+    websocket/ws.module.ts                     @Module; WsGateway + WsPublisher
+    websocket/ws.gateway.ts                    @WebSocketGateway('/ws');
+  afterInit → io.adapter(redisAdapter); handleConnection → verify JWT + join
+  rooms
+    websocket/ws.publisher.ts                  @Injectable; emit(channel, event,
+   payload)
+    websocket/ws-auth.ts                       JWT verify + permittedChannels()
+  pkg/
+    cache/cache.interface.ts                   ICacheProvider
+    cache/redis.ts                             RedisCacheProvider over ioredis
+  (used for SETNX dedupe in core-events)
+    messaging/message-broker.interface.ts      IMessageBroker (consume +
+  publish)
+    messaging/rabbitmq/rabbitmq.client.ts      amqp-connection-manager wrapper
+  (copied from serviceBv2)
+    messaging/rabbitmq/rabbitmq.types.ts       config types (copied)
+    payments/payment.interface.ts              IPaymentProvider stub (interface
+  only — implementation lands in Phase 2)
+    utils/time.utils.ts                        toMs/toSeconds
+    utils/money.ts
+  toMinor/fromMinor/sumMinor/multiplyMinor
+    utils/retry.ts                             exponential backoff (copied)
+  app/
+    health/health.module.ts                    @Module
+    health/health.controller.ts                GET /api/health → calls
+  KNEX_CONNECTION.pingAll()
+  database/
+    migrations/                                empty in Phase 0 per §0.4
+
+  A.3 Glue points worth flagging
+
+  - The Redis client is a single ioredis instance instantiated in
+  pkg/cache/redis.ts — same instance is reused by:
+    - @nestjs/cache-manager (UnifiedCacheInterceptor + IdempotencyInterceptor)
+  via @keyv/redis,
+    - core-events/core-events.consumer.ts for SETNX dedupe (uses a
+  RedisCacheProvider view of the same ioredis),
+    - websocket/ws.gateway.ts's @socket.io/redis-adapter (and a .duplicate() for
+   the subscriber).
+  - The KNEX_CONNECTION token now resolves to ShardedKnex ({ db, dbArchive, 
+  pingAll }), not a raw Knex. This is a deliberate deviation from core. All
+  future repositories will type their constructor as @Inject('KNEX_CONNECTION') 
+  private readonly knex: ShardedKnex and use
+  this.knex.db(region).transaction(...). CLAUDE.md §8 explicitly authorizes
+  this.
+  - The DatabaseLoggerService would normally write to a logs table — but Phase 0
+   has no migrations. The service still ships, but insertLogSafe is wrapped in a
+   try/catch that swallows the "relation does not exist" error so boot doesn't
+  break. This matches what the core service does (it already swallows DB
+  errors). I'll add a TODO comment.
+
+  Track B — core-service/backend/ files to create / edit
+
+  B.1 New migrations (under core-service/backend/src/database/migrations/)
+
+  - 20260418000001_seed_order_service_permissions.ts — adapted from
+  serviceBv2Core's version. Note: core's existing seed migration uses
+  core:product/core:branch resource naming but the plan + ref both want
+  unprefixed orders/payments/deliveries/finance. I'll keep the ref's naming
+  (matches the rbac.md doc).
+  - 20260418000002_create_events_outbox.ts — events_outbox table per spec.
+  - 20260418000003_add_delivery_fee_to_branches.ts — ALTER TABLE 
+  restaurant_branches ADD COLUMN delivery_fee INT NOT NULL DEFAULT 0.
+
+  B.2 New code
+
+  - src/lib/middleware/guards/internal-api-key.guard.ts — @Injectable() 
+  RequireInternalApiKeyGuard. Reads INTERNAL_API_KEY from ConfigService, plain
+  equality vs x-api-key header. Throws UnauthorizedException on mismatch,
+  ServiceUnavailableException if the secret isn't configured.
+  - src/lib/events/event-types.ts — EVENT_TYPES constants (copied verbatim from
+  ref).
+  - src/lib/events/types.ts — OutboxRow, InsertOutboxInput (copied).
+  - src/lib/events/outbox.repository.ts — @Injectable() Knex repo:
+  insertOutboxEvent(trx, input), claimBatch(trx, limit), markDispatched(trx, 
+  id), markFailed(trx, id, err). Adapts the ref's module-level functions into a
+  Nest provider so services can inject it.
+  - src/lib/events/outbox-drain.service.ts — @Injectable(); drainOutbox() opens
+  a hot-Knex trx, claims a batch, publishes via
+  MessageBrokerService.publishConfirmed, marks dispatched/failed.
+  - src/pkg/messaging/message-broker.interface.ts — copied verbatim.
+  - src/pkg/messaging/rabbitmq.client.ts — copied verbatim (publisher-only
+  client).
+  - src/lib/events/messaging.module.ts — @Module exporting a single
+  MessageBrokerService (@Injectable Nest wrapper around RabbitMQClient).
+  OnModuleInit connects + declares exchange. OnApplicationShutdown closes.
+  - src/lib/events/events.module.ts — exposes OutboxRepository for service-layer
+   injection (@Global so any future service can inject it).
+  - src/worker.ts — separate process entry. Boots a minimal
+  NestFactory.createApplicationContext(WorkerModule), resolves
+  OutboxDrainService and MessageBrokerService, schedules drain via a simple
+  setInterval (not @nestjs/schedule's @Cron because the plan calls for croner
+  and per-second cadence; I'll use croner like the ref). On SIGTERM/SIGINT: stop
+   the cron, close broker, close DB.
+  - src/worker.module.ts — minimal module: ConfigModule.forRoot, DatabaseModule,
+   MessagingModule, EventsModule. No HTTP, no controllers.
+
+  B.3 Edits (existing files)
+
+  - src/lib/config/app.config.ts — add internal: { apiKey }, rabbit: { url, 
+  exchange, drainCron, batchSize } blocks.
+  - package.json — add deps amqplib, amqp-connection-manager, croner. Add
+  scripts worker, worker:dev.
+
+  Track-specific touch points to highlight before I write
+
+  1. Logs table in Phase 0. Plan §0.4 says no migrations. Core's
+  LoggingInterceptor and DatabaseLoggerService write to a logs table. Proposal:
+  ship the services; the DB-write path silently no-ops until Phase 1's logs
+  migration. Console logging still works. If you'd rather I add a logs migration
+   in Phase 0 and call that an exception to §0.4, say so.
+  2. Idempotency DB-fallback. Same story — core's interceptor uses Redis only
+  (no DB fallback in the source we have). The plan says to disable the
+  DB-fallback hook until Phase 1. Since core's interceptor doesn't have one,
+  copying it as-is already satisfies that. I'll add a TODO marker for Phase 1 to
+   add the idempotency_keys table integration.
+  3. Permission resolution in PermissionsGuard. Core's guard injects
+  PermissionCacheService from app/rbac/. Order-service has no app/rbac/ yet.
+  Proposal: I'll write PermissionsGuard to inject a PermissionCacheService
+  interface token; in Phase 0 I'll provide a stub class that always returns true
+   for system_admin and otherwise denies (matching "deny on cache miss when
+  stale" semantics). Phase 1+ replaces the stub with a real implementation
+  backed by core-client/permission.client.ts. Alternatively I can defer the
+  guard entirely until Phase 1 — let me know.
+  4. WS auth token sources. The doc says cookie or ?token=. The ref drops
+  ?token= to avoid log leakage. I'll go with the doc (cookie + auth.token +
+  ?token= accepted), but note query-string is logged unless we configure access
+  logs to strip it. Speak up if you'd prefer the ref's stricter posture.
+  5. Sharded Knex provider as KNEX_CONNECTION. Reusing the same DI token as core
+   (CLAUDE.md §8 says to). The shape changes from raw Knex to ShardedKnex —
+  every future repo writes this.knex.db(region). This is the right call but
+  worth flagging since "import the token, get a different shape" can surprise
+  readers. I'll document this with a JSDoc on the provider.
+  6. No outbound events from order-service in Phase 0 — plan is clear; no
+  events_outbox here, no publisher service. The messaging.module.ts only wires
+  the consumer-side connection.
+
+  Order of writes (after you green-light)
+
+  1. Track B core-service deltas first (so the order-service Phase 0 acceptance
+  can plausibly run end-to-end against a real outbox).
+    a. Migrations (3 files).
+    b. internal-api-key.guard.ts.
+    c. pkg/messaging/*.
+    d. lib/events/* + messaging.module.ts + events.module.ts.
+    e. worker.module.ts + worker.ts.
+    f. app.config.ts edits + package.json edits.
+  2. Track A order-service from scratch.
+    a. package.json, tsconfig*.json, nest-cli.json, .env.example, knexfile.ts.
+    b. pkg/ (utils, cache, messaging interface + client).
+    c. lib/config, lib/context, lib/middleware/correlation, lib/filters,
+  lib/interceptors, lib/logging, lib/pagination, lib/decorators, lib/types,
+  lib/cache, lib/idempotency, lib/middleware/guards.
+    d. lib/sharding/*, lib/database.*.
+    e. lib/messaging/*, lib/core-events/*.
+    f. lib/core-client/*.
+    g. lib/websocket/*.
+    h. app/health/*.
+    i. app.module.ts, main.ts.
+
+  Out of scope for this work
+
+  - No npm install runs (Windows + offline-leaning environment; you can run
+  those after).
+  - No actual broker/Postgres/Redis tests — I'll verify by reading-only that
+  wiring compiles cleanly. I cannot prove acceptance criteria from §0 without a 
+  running stack. I'll flag this when I'm done.
+  - No ultrareview/security-review/simplify runs.
+  - I won't touch serviceBv2/ or serviceBv2Core/.
+
+  ---
+  Decisions I need from you before I write code:
+  1. Logs table in Phase 0 — ship DatabaseLoggerService with a no-op DB write
+  (my preference), or add a logs migration as an exception? (my pick: no-op)
+  2. PermissionsGuard stub vs defer until Phase 1? (my pick: ship the guard with
+   a stubbed PermissionCacheService interface so later modules can decorate 
+  routes today)
+  3. WS query-string token — accept ?token= (per docs) or reject (per ref)? (my 
+  pick: per docs, accept)
+
+  Once you confirm or override, I'll start with Track B.
+
+✻ Cogitated for 4m 12s
+
+❯ for logs you can make one exception for only loggin so can finish it here adn 
+    PermissionsGuard — OVERRIDE YOUR PICK. DEFER until Phase 1.                 
+     Don't ship a stub PermissionCacheService. We'll introduce the              
+     guard alongside the permission cache when we have a real                   
+     implementation. Phase 0 controllers don't need @RequirePermissions         
+     yet (only /api/health exists).                                             
+                                                                                
+  3. WS token sources — OVERRIDE YOUR PICK. Reject ?token= query                
+     string (match the reference's stricter posture). Accept only:              
+     - HttpOnly cookie                                                          
+     - socket.io auth.token field on handshake so execute plan                  
+
+● Decisions locked in. Starting with Track B (core-service prerequisites), then
+  Track A (order-service scaffold). Let me set up task tracking.
+● Starting with Track B. Three core-service migrations first.
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\database\migratio
+       ns\20260418000001_seed_order_service_permissions.ts)
+  ⎿  Wrote 60 lines to ..\core-service\backend\src\database\migrations\2026
+     0418000001_seed_order_service_permissions.ts
+       2 import type { Knex } from 'knex';
+       3 export async function up(knex: Knex): Promise<void> {
+       4   await knex.raw(`
+       5     INSERT INTO permissions (resource, action, created_at) VALUE
+         S
+       6       ('orders',     'read',          NOW()),
+       7       ('orders',     'accept',        NOW()),
+       8       ('orders',     'update',        NOW()),
+       9       ('orders',     'cancel',        NOW()),
+      10       ('payments',   'read',          NOW()),
+     … +53 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\database\migratio
+       ns\20260418000002_create_events_outbox.ts)
+  ⎿  Wrote 26 lines to ..\core-service\backend\src\database\migrations\2026
+     0418000002_create_events_outbox.ts
+       1 import type { Knex } from 'knex';
+       2 
+       3 export async function up(knex: Knex): Promise<void> {
+       4   await knex.raw(`
+       5     CREATE TABLE events_outbox (
+       6       id              BIGSERIAL PRIMARY KEY,
+       7       aggregate_type  TEXT NOT NULL,
+       8       aggregate_id    TEXT NOT NULL,
+       9       event_type      TEXT NOT NULL,
+      10       event_id        UUID NOT NULL UNIQUE,
+     … +16 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\database\migratio
+       ns\20260418000003_add_delivery_fee_to_branches.ts)
+  ⎿  Wrote 14 lines to ..\core-service\backend\src\database\migrations\2026
+     0418000003_add_delivery_fee_to_branches.ts
+       2 import type { Knex } from 'knex';
+       3 // Flat per-branch delivery fee in minor units of the branch cur
+         rency.
+       4 // Read by order-service at checkout via GET /api/internal/branc
+         hes/:id.
+       6   await knex.raw(`ion up(knex: Knex): Promise<void> {
+       7     ALTER TABLE restaurant_branches
+       8     ADD COLUMN delivery_fee INT NOT NULL DEFAULT 0;
+       9   `);
+      10 }
+     … +7 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\middleware\gu
+       ards\internal-api-key.guard.ts)
+  ⎿  Wrote 31 lines to ..\core-service\backend\src\lib\middleware\guards\in
+     ternal-api-key.guard.ts
+       1 import {
+       2   CanActivate,
+       3   ExecutionContext,
+       4   Injectable,
+       5   ServiceUnavailableException,
+       6   UnauthorizedException,
+       7 } from '@nestjs/common';
+       8 import { ConfigService } from '@nestjs/config';
+       9 import { Request } from 'express';
+      10 import { GUARD_ERRORS } from './guard.constants';
+     … +24 lines (ctrl+o to expand)
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\middleware\g
+        uards\guard.constants.ts)
+  ⎿  Added 5 lines, removed 1 line
+       7    BRANCH_ACCESS_DENIED: 'You are not assigned to manage this sp
+          ecific branch',
+       8  
+       9    // 🛡️ Dynamic Permission Error (Arrow function to handle the 
+          variables!)
+      10 -  MISSING_PERMISSION: (resource: string, action: string) =>    
+      10 +  MISSING_PERMISSION: (resource: string, action: string) =>    
+      11      `Missing required permission: ${resource}:${action}`,
+      12 +                                                               
+      13 +  // 🛡️ Internal API key (service-to-service)                  
+      14 +  INVALID_INTERNAL_API_KEY: 'Invalid or missing internal API ke
+         +y',                                                            
+      15 +  INTERNAL_API_KEY_NOT_CONFIGURED: 'Internal API key is not con
+         +figured on the server',                                        
+      16  };
+      17   No newline at end of file
+
+● Now the messaging package + outbox + worker on core-service.
+
+● Bash(mkdir -p "C:\Users\Zeyad
+      Rafat\Study\Projects\foodOrderApp\core-service\backend\src\pkg\messaging"
+      "C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\core-servic…)
+  ⎿  Done
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\pkg\messaging\mes
+       sage-broker.interface.ts)
+  ⎿  Wrote 10 lines to
+     ..\core-service\backend\src\pkg\messaging\message-broker.interface.ts
+       2   connect(): Promise<void>;oker {
+       3   close(): Promise<void>;
+       4   declareExchange(exchange: string): Promise<void>;
+       5   /**
+       6    * Publishes a message with publisher confirms. Resolves only 
+       7    * broker has acked. Rejects on nack or connection loss.
+       8    */
+       9   publishConfirmed(exchange: string, routingKey: string, body: B
+         uffer): Promise<void>;
+      10 }
+     … +2 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\pkg\messaging\rab
+       bitmq.client.ts)
+  ⎿  Wrote 64 lines to
+     ..\core-service\backend\src\pkg\messaging\rabbitmq.client.ts
+      1 import amqp from 'amqp-connection-manager';
+      2 import type { AmqpConnectionManager, ChannelWrapper } from 'amqp-
+        connection-manager';
+      3 import type { ConfirmChannel } from 'amqplib';
+      4 import type { IMessageBroker } from './message-broker.interface';
+      5 
+      6 export interface RabbitMQConfig {
+      7   url: string;
+      8   reconnectInitialMs?: number;
+      9 }
+     … +58 lines (ctrl+o to expand)
+
+● Now the lib/events files for core-service.
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\event-
+       types.ts)
+  ⎿  Wrote 14 lines to
+     ..\core-service\backend\src\lib\events\event-types.ts
+       2  * Canonical event-type constants. The order-service's bindings
+       3  * (`product.*`, `branch.*`, `restaurant.*`, `rbac.*`) must stay
+          in sync.
+       4  */
+       5 export const EVENT_TYPES = {
+       6   PRODUCT_STOCK_CHANGED: 'product.stock.changed',
+       7   PRODUCT_PRICE_CHANGED: 'product.price.changed',
+       8   BRANCH_UPDATED: 'branch.updated',
+       9   BRANCH_DEACTIVATED: 'branch.deactivated',
+      10   RESTAURANT_SUSPENDED: 'restaurant.suspended',
+     … +6 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\events
+       .types.ts)
+  ⎿  Wrote 16 lines to
+     ..\core-service\backend\src\lib\events\events.types.ts
+      1 export interface OutboxRow {
+      2   id: string;
+      3   aggregate_type: string;
+      4   aggregate_id: string;
+      5   event_type: string;
+      6   event_id: string;
+      7   payload: unknown;
+      8   attempts: number;
+      9 }
+     … +6 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\outbox
+       .repository.ts)
+  ⎿  Wrote 63 lines to
+     ..\core-service\backend\src\lib\events\outbox.repository.ts
+       1 import { Inject, Injectable } from '@nestjs/common';
+       2 import { Knex } from 'knex';
+       3 import { randomUUID } from 'crypto';
+       4 import { InsertOutboxInput, OutboxRow } from './events.types';
+       5 
+       6 @Injectable()
+       7 export class OutboxRepository {
+       8   constructor(
+       9     @Inject('KNEX_CONNECTION') private readonly knex: Knex,
+      10   ) {}
+     … +62 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\messag
+       e-broker.service.ts)
+  ⎿  Wrote 57 lines to
+     ..\core-service\backend\src\lib\events\message-broker.service.ts
+       2   Injectable,
+       3   Logger,
+       4   OnApplicationShutdown,
+       5   OnModuleInit,
+       6 } from '@nestjs/common';
+       7 import { ConfigService } from '@nestjs/config';
+       8 import { RabbitMQClient } from '../../pkg/messaging/rabbitmq.cli
+         ent';
+       9 
+      10 /**
+     … +58 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\outbox
+       -drain.service.ts)
+  ⎿  Wrote 92 lines to
+     ..\core-service\backend\src\lib\events\outbox-drain.service.ts
+       2 import { ConfigService } from '@nestjs/config';stjs/common';
+       3 import { Knex } from 'knex';
+       4 import { MessageBrokerService } from './message-broker.service';
+       6 import { OutboxRepository } from './outbox.repository';
+       7 /**
+       8  * One pass over events_outbox: claim a batch with FOR UPDATE SK
+       9  * publish each row to the exchange with publisher confirms, mar
+         k dispatched.
+      10  * On publish failure: mark the row failed (attempts+1) and bail
+          out of the
+     … +88 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\events\events
+       .module.ts)
+  ⎿  Wrote 18 lines to
+     ..\core-service\backend\src\lib\events\events.module.ts
+       2 import { MessageBrokerService } from './message-broker.service';
+       3 import { OutboxDrainService } from './outbox-drain.service';
+       4 import { OutboxRepository } from './outbox.repository';
+       6 /**
+       7  * Global module so any service-layer call site can inject `Outb
+         oxRepository`
+         n. to write an outbox row in the same DB trx as a domain mutatio
+       9  *
+      10  * The outbox is drained by a separate worker process (see `src/
+         worker.ts`).
+     … +13 lines (ctrl+o to expand)
+
+● Now the worker process. The plan says use croner. But since the API process's
+  app.module.ts doesn't yet import EventsModule and the worker is a separate
+  boot, I'll create a tiny WorkerModule.
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\worker.module.ts)
+  ⎿  Wrote 18 lines to ..\core-service\backend\src\worker.module.ts
+       2 import { ConfigModule } from '@nestjs/config';
+       3 import appConfig from './lib/config/app.config';
+       4 import { DatabaseModule } from './lib/database.module';
+       5 import { EventsModule } from './lib/events/events.module';
+       6 
+       8  * Minimal module for the outbox worker process. No HTTP, no con
+         trollers, no
+       9  * scheduling here — `src/worker.ts` orchestrates the cron loop 
+         directly.
+      10  */
+     … +10 lines (ctrl+o to expand)
+
+● Write(~\Study\Projects\foodOrderApp\core-service\backend\src\worker.ts)
+  ⎿  Wrote 56 lines to ..\core-service\backend\src\worker.ts
+       2 import { ConfigService } from '@nestjs/config';
+       3 import { NestFactory } from '@nestjs/core';
+       4 import { Cron } from 'croner';
+       5 import { OutboxDrainService } from './lib/events/outbox-drain.se
+         rvice';
+       6 import { WorkerModule } from './worker.module';
+       7 
+       8 /**
+       9  * Outbox worker — runs independently of the HTTP server.
+      10  *
+     … +55 lines (ctrl+o to expand)
+
+● Now extend core-service config and package.json. The EventsModule is @Global()
+   so service-layer code can inject OutboxRepository, but the API process won't
+  import it unless app.module.ts lists it. I'll add it to app.module.ts's
+  imports too — that way the API can register handlers in their own DB trx and
+  the worker drains them.
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\lib\config\app.c
+        onfig.ts)
+  ⎿  Added 16 lines
+      32      fromEmail: process.env.MAILJET_FROM_EMAIL as string,
+      33      fromName: process.env.MAILJET_FROM_NAME as string,
+      34    },
+      35 +                                                               
+      36 +  // Shared secret for service-to-service HTTP calls (matched a
+         +gainst                                                         
+      37 +  // x-api-key header by RequireInternalApiKeyGuard).          
+      38 +  internal: {                                                  
+      39 +    apiKey: process.env.INTERNAL_API_KEY as string,            
+      40 +  },                                                           
+      41 +                                                               
+      42 +  // RabbitMQ — outbox worker publishes core.events here (consu
+         +med by                                                         
+      43 +  // order-service for cache invalidation).                    
+      44 +  rabbit: {                                                    
+      45 +    url: process.env.RABBITMQ_URL as string,                   
+      46 +    exchange: process.env.RABBITMQ_CORE_EVENTS_EXCHANGE || 'cor
+         +e.events',                                                     
+      47 +    drainCron: process.env.OUTBOX_DRAIN_CRON || '* * * * * *', 
+      48 +    batchSize: parseInt(process.env.OUTBOX_BATCH_SIZE || '50', 
+         +10),                                                           
+      49 +  },                                                           
+      50  });
+      51 +                                                               
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\app.module.ts)
+  ⎿  Added 1 line
+      31  import { ProductModule } from './app/product/product.module';
+      32  import { RbacModule } from './app/rbac/rbac.module';
+      33  import { EmailModule } from './lib/email/email.module';
+      34 +import { EventsModule } from './lib/events/events.module';     
+      35  
+      36  @Module({
+      37    imports: [
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\src\app.module.ts)
+  ⎿  Added 2 lines, removed 1 line
+      70      BranchModule,
+      71      ProductModule,
+      72      RbacModule,
+      73 -                                                               
+      73 +                                                               
+      74      EmailModule,
+      75 +    EventsModule,                                              
+      76      // Add your new domain modules (Users, Orders, etc.) here a
+          s you build them
+      77    ],
+      78    controllers: [],
+
+● Now package.json deps + worker scripts:
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 3 lines, removed 1 line
+      25      "test:e2e:cov": "jest --config ./test/jest-e2e.json --cover
+          age",
+      26      "test:e2e:debug": "node --inspect-brk -r tsconfig-paths/reg
+          ister -r ts-node/register node_modules/.bin/jest --config ./tes
+          t/jest-e2e.json --runInBand",
+      27      "test:all": "npm run test && npm run test:e2e",
+      28 -    "test:db:setup": "npm run db:clear && npm run seed:demo"   
+      28 +    "test:db:setup": "npm run db:clear && npm run seed:demo",  
+      29 +    "worker": "node dist/worker",                              
+      30 +    "worker:dev": "ts-node-dev -r tsconfig-paths/register src/w
+         +orker.ts"                                                      
+      31    },
+      32    "dependencies": {
+      33      "@keyv/redis": "^5.1.6",
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 2 lines
+      46      "@nestjs/typeorm": "^10.0.2",
+      47      "@nestjs/websockets": "^10.4.19",
+      48      "@types/cors": "^2.8.19",
+      49 +    "amqp-connection-manager": "^4.1.14",                      
+      50 +    "amqplib": "^0.10.4",                                      
+      51      "bcrypt": "^6.0.0",
+      52      "bcryptjs": "^3.0.3",
+      53      "cache-manager": "^7.2.8",
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 1 line
+      56      "cloudinary": "^2.7.0",
+      57      "cookie-parser": "^1.4.7",
+      58      "cors": "^2.8.6",
+      59 +    "croner": "^9.0.0",                                        
+      60      "date-fns": "^4.1.0",
+      61      "dotenv": "^16.4.7",
+      62      "handlebars": "^4.7.8",
+
+● Update(~\Study\Projects\foodOrderApp\core-service\backend\package.json)
+  ⎿  Added 1 line
+      83      "@nestjs/cli": "^10.0.0",
+      84      "@nestjs/schematics": "^10.0.0",
+      85      "@nestjs/testing": "^10.0.0",
+      86 +    "@types/amqplib": "^0.10.5",                               
+      87      "@types/bcrypt": "^5.0.2",
+      88      "@types/cookie-parser": "^1.4.10",
+      89      "@types/express": "^5.0.0",
+
+● Track B done. Moving to Track A — order-service from scratch.
+
+● Write(package.json)
+  ⎿  Wrote 98 lines to package.json
+       2   "name": "order-service",
+       3   "version": "0.0.1",
+       4   "description": "QuickBite — orders, payments, deliveries, rest
+         aurant finance",
+       5   "private": true,
+       7   "scripts": {UNLICENSED",
+       8     "build": "nest build",
+       9     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"
+         ",
+      10     "start": "nest start",
+     … +90 lines (ctrl+o to expand)
+
+● Write(tsconfig.json)
+  ⎿  Wrote 21 lines to tsconfig.json
+       1 {
+       2   "compilerOptions": {
+       3     "module": "commonjs",
+       4     "declaration": true,
+       5     "removeComments": true,
+       6     "emitDecoratorMetadata": true,
+       7     "experimentalDecorators": true,
+       8     "allowSyntheticDefaultImports": true,
+       9     "esModuleInterop": true,
+      10     "target": "ES2021",
+     … +11 lines (ctrl+o to expand)
+
+● Write(tsconfig.build.json)
+  ⎿  Wrote 4 lines to tsconfig.build.json
+      1 {
+      2   "extends": "./tsconfig.json",
+      3   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+      4 }
+
+● Write(nest-cli.json)
+  ⎿  Wrote 10 lines to nest-cli.json
+       1 {
+       2   "$schema": "https://json.schemastore.org/nest-cli",
+       3   "collection": "@nestjs/schematics",
+       4   "sourceRoot": "src",
+       5   "compilerOptions": {
+       6     "deleteOutDir": true,
+       7     "plugins": ["@nestjs/swagger"],
+       8     "watchAssets": true
+       9   }
+      10 }
+
+● Write(.env.example)
+  ⎿  Wrote 76 lines to .env.example
+       2 PORT=4000development
+       3 
+       4 # JWTs — secrets MUST match core-service so cross-issued tokens 
+         verify
+       5 ACCESS_SECRET=changeme
+       6 REFRESH_SECRET=changeme
+       7 ACCESS_EXPIRES_IN=3600
+       8 REFRESH_EXPIRES_IN=604800
+       9 
+      10 CORS_ORIGINS=http://localhost:3000
+     … +68 lines (ctrl+o to expand)
+
+● Write(.gitignore)
+  ⎿  Wrote 11 lines to .gitignore
+       1 node_modules/
+       2 dist/
+       3 coverage/
+       4 .env
+       5 .env.local
+       6 .env.*.local
+       7 *.log
+       8 .DS_Store
+       9 .idea/
+      10 .vscode/
+     … +1 line (ctrl+o to expand)
+
+● Write(knexfile.ts)
+  ⎿  Wrote 60 lines to knexfile.ts
+       2 import type { Knex } from 'knex';rom 'dotenv';
+       3 
+       4 loadDotenv();
+       5 
+       6 /**
+          vars.lds a knex config for the region+cluster identified by env
+       8  *   REGION=eg|ksa|...    (required — never default, so migratio
+         ns can't silently
+       9  *                          run against the wrong shard)
+      10  *   CLUSTER=hot|archive  (defaults to "hot")
+     … +56 lines (ctrl+o to expand)
+
+● Now pkg/. Framework-agnostic, no NestJS imports.
+
+● Bash(mkdir -p "C:\Users\Zeyad
+      Rafat\Study\Projects\foodOrderApp\order-service\src\pkg\cache"
+      "C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\order-service\src\pkg\…)
+  ⎿  Done
+
+● Write(src\pkg\utils\time.utils.ts)
+  ⎿  Wrote 16 lines to src\pkg\utils\time.utils.ts
+       1 type TimeUnit = 'd' | 'h' | 'm' | 's';
+       2 
+       3 const multipliers: Record<TimeUnit, number> = {
+       4   s: 1000,
+       5   m: 60 * 1000,
+       6   h: 60 * 60 * 1000,
+       7   d: 24 * 60 * 60 * 1000,
+       8 };
+       9 
+      10 export function toMs(value: number, unit: TimeUnit): number {
+     … +6 lines (ctrl+o to expand)
+
+● Write(src\pkg\utils\money.ts)  ⎿  Wrote 20 lines to src\pkg\utils\money.ts
+       1 // All money in this service is expressed as INT minor units
+       2 // (piasters, halalas). Display formatting is the client's job.
+       3 
+       4 export function toMinor(majorUnits: number): number {
+       5   return Math.round(majorUnits * 100);
+       6 }
+       7 
+       8 export function fromMinor(minor: number): number {
+       9   return minor / 100;
+      10 }
+     … +11 lines (ctrl+o to expand)
+
+● Write(src\pkg\utils\retry.ts)
+  ⎿  Wrote 24 lines to src\pkg\utils\retry.ts
+       2   attempts: number; // total tries including the first
+       3   initialDelayMs: number;
+       4   maxDelayMs: number;
+       5   isRetryable?: (err: unknown) => boolean;
+       6 }
+       7 
+       8 export async function retry<T>(fn: () => Promise<T>, opts: Retry
+         Options): Promise<T> {
+       9   let delay = opts.initialDelayMs;
+      10   let lastErr: unknown;
+     … +15 lines (ctrl+o to expand)
+
+● Write(src\pkg\cache\cache.interface.ts)
+  ⎿  Wrote 11 lines to src\pkg\cache\cache.interface.ts
+       2   get(key: string): Promise<string | null>;
+       3   set(key: string, value: string, ttlSeconds?: number): Promise<
+         void>;
+       5   del(key: string): Promise<number>;
+       6   /**
+       7    * Atomic "set if absent". Returns true if the key was newly s
+       8    * it already existed. Used for dedupe and distributed locks.
+       9    */
+      10   trySet(key: string, value: string, ttlSeconds?: number): Promi
+         se<boolean>;
+     … +4 lines (ctrl+o to expand)
+
+● Write(src\pkg\cache\redis.ts)
+  ⎿  Wrote 35 lines to src\pkg\cache\redis.ts
+       2 import type { ICacheProvider } from './cache.interface';
+       3 
+       4 export class RedisCacheProvider implements ICacheProvider {
+       6    * Exposed so integrations that need the raw ioredis connectio
+         n (e.g. the
+       7    * socket.io redis adapter) can reuse it instead of opening an
+       8    * The adapter still needs a separate subscriber via `client.d
+         uplicate()` —
+       9    * once ioredis is in subscribe mode it can't serve get/set.
+      10    */
+     … +30 lines (ctrl+o to expand)
+
+● Write(src\pkg\messaging\message-broker.interface.ts)
+  ⎿  Wrote 26 lines to src\pkg\messaging\message-broker.interface.ts
+       1 export interface ConsumeMessage {
+       2   routingKey: string;
+       3   body: Buffer;
+       4   ack(): void;
+       5   nack(requeue?: boolean): void;
+       6 }
+       7 
+       8 export interface ConsumerOptions {
+       9   queue: string;
+      10   exchange: string;
+     … +17 lines (ctrl+o to expand)
+
+● Write(src\pkg\messaging\rabbitmq\rabbitmq.types.ts)
+  ⎿  Wrote 5 lines to src\pkg\messaging\rabbitmq\rabbitmq.types.ts
+      1 export interface RabbitMQConfig {
+      2   url: string;
+      3   reconnectInitialMs: number; // first backoff, doubles up to rec
+        onnectMaxMs
+      4   reconnectMaxMs: number;
+      5 }
+
+● Write(src\pkg\messaging\rabbitmq\rabbitmq.client.ts)
+  ⎿  Wrote 140 lines to src\pkg\messaging\rabbitmq\rabbitmq.client.ts
+       1 import amqp from 'amqp-connection-manager';
+       2 import type {
+       3   AmqpConnectionManager,
+       4   ChannelWrapper,
+       5 } from 'amqp-connection-manager';
+       6 import type {
+       7   ConfirmChannel,
+       8   ConsumeMessage as AmqpConsumeMessage,
+       9 } from 'amqplib';
+      10 import type {
+     … +142 lines (ctrl+o to expand)
+
+● Write(src\pkg\payments\payment.interface.ts)
+  ⎿  Wrote 52 lines to src\pkg\payments\payment.interface.ts
+       2  * Provider-agnostic payment surface. Concrete providers (Kashie
+         r today, Stripe
+       3  * tomorrow) implement this interface in their own files under
+         whicheverayments/<provider>/`. The Phase 2 payment module wires 
+       5  * provider is configured into a NestJS service.
+       6  *
+         ions yet.0 declares the interface only — no provider implementat
+       8  */
+       9 
+      10 export interface CreateSessionInput {
+     … +46 lines (ctrl+o to expand)
+
+● Now lib/ core. Start with the config factory.
+
+● Bash(mkdir -p "C:\Users\Zeyad
+      Rafat\Study\Projects\foodOrderApp\order-service\src\lib\config"
+      "C:\Users\Zeyad Rafat\Study\Projects\foodOrderApp\order-service\src\lib…)
+  ⎿  Done
+
+● Write(src\lib\config\app.config.ts)
+  ⎿  Wrote 150 lines to src\lib\config\app.config.ts
+      2  * Typed config tree. Loaded once via `ConfigModule.forRoot({ isG
+        lobal: true,
+        get(...)`.appConfig] })`. Read at runtime through `ConfigService.
+      4  *
+        ach region thes the source of truth for which shards exist. For e
+      6  * factory reads `DB_<region>_*` (hot cluster) and `ARCHIVE_DB_<r
+      7  * env vars and builds the per-region triples. The sharded Knex p
+        rovider in
+        ls per region.se.providers.ts` consumes these to lazily build poo
+      9  */
+     … +161 lines (ctrl+o to expand)
+
+● Write(src\lib\context\request-context.service.ts)
+  ⎿  Wrote 16 lines to src\lib\context\request-context.service.ts
+       2 import { AsyncLocalStorage } from 'async_hooks';
+       3 
+       4 @Injectable()
+       5 export class RequestContextService {
+       6   private static readonly storage = new AsyncLocalStorage<Map<st
+       7 ring, string>>();
+       8   run(correlationId: string, callback: () => void) {
+       9     const store = new Map<string, string>().set('correlationId',
+          correlationId);
+      10     RequestContextService.storage.run(store, callback);
+     … +9 lines (ctrl+o to expand)
+
+● Write(src\lib\middleware\correlation.middleware.ts)
+  ⎿  Wrote 21 lines to src\lib\middleware\correlation.middleware.ts
+       2 import { Request, Response, NextFunction } from 'express';';
+       3 import { v4 as uuidv4 } from 'uuid';
+       4 import { RequestContextService } from '../context/request-contex
+         t.service';
+       5 
+       7 export class CorrelationMiddleware implements NestMiddleware {
+       8   constructor(private readonly context: RequestContextService) {
+         }
+       9 
+      10   use(req: Request, res: Response, next: NextFunction) {
+     … +12 lines (ctrl+o to expand)
+
+● Write(src\lib\filters\http-exception.filter.ts)
+  ⎿  Wrote 47 lines to src\lib\filters\http-exception.filter.ts
+       2   ArgumentsHost,
+       3   Catch,
+       4   ExceptionFilter,
+       5   HttpException,
+       6   HttpStatus,
+       7   Logger,
+       8 } from '@nestjs/common';
+       9 import { Response } from 'express';
+      10 import { RequestContextService } from '../context/request-contex
+         t.service';
+     … +40 lines (ctrl+o to expand)
+
+● Write(src\lib\filters\database-error.filter.ts)
+  ⎿  Wrote 95 lines to src\lib\filters\database-error.filter.ts
+      1 import {
+      2   ArgumentsHost,
+      3   Catch,
+      4   ExceptionFilter,
+      5   HttpException,
+      6   HttpStatus,
+      7   Logger,
+      8 } from '@nestjs/common';
+      9 import { Response } from 'express';
+     … +90 lines (ctrl+o to expand)
+
+● Write(src\lib\interceptors\success.interceptor.ts)
+  ⎿  Wrote 31 lines to src\lib\interceptors\success.interceptor.ts
+       1 import {
+       2   CallHandler,
+       3   ExecutionContext,
+       4   Injectable,
+       5   NestInterceptor,
+       6 } from '@nestjs/common';
+       7 import { Observable } from 'rxjs';
+       8 import { map } from 'rxjs/operators';
+       9 
+      10 @Injectable()
+     … +23 lines (ctrl+o to expand)
+
+● Write(src\lib\logging\log.interface.ts)
+  ⎿  Wrote 18 lines to src\lib\logging\log.interface.ts
+       1 export interface Log {
+       2   id?: number;
+       3   timestamp?: Date;
+       4   level?: string;
+       5   correlationId?: string;
+       6   packetType: string;
+       7   userId?: number;
+       8   ipAddress?: string;
+       9   userAgent?: string;
+      10   action: string;
+     … +8 lines (ctrl+o to expand)
+
+● Write(src\lib\logging\database-logger.service.ts)
+  ⎿  Wrote 87 lines to src\lib\logging\database-logger.service.ts
+         js/common';ject, Injectable, Logger, LoggerService } from '@nest
+       2 import { Log } from './log.interface';
+       4 import { ShardedKnex } from '../sharding/shards';
+       5 /**
+       6  * Writes a row per request to the per-region `logs` table on th
+       7  * resolved region (falls back to the first configured region fo
+         r system-level
+         nal; DB writest a request context). Console output is unconditio
+       9  * are best-effort and never crash the app.
+      10  */
+     … +86 lines (ctrl+o to expand)
+
+● Write(src\lib\logging\logging.interceptor.ts)
+  ⎿  Wrote 56 lines to src\lib\logging\logging.interceptor.ts
+       2   CallHandler,
+       3   ExecutionContext,
+       4   Injectable,
+       5   NestInterceptor,
+       6 } from '@nestjs/common';
+       7 import { Observable, tap } from 'rxjs';
+       8 import { catchError } from 'rxjs/operators';
+       9 import { Request } from 'express';
+      10 import { DatabaseLoggerService } from './database-logger.service
+         ';
+     … +49 lines (ctrl+o to expand)
+● Write(src\lib\pagination\cursor-pagination.ts)
+  ⎿  Wrote 100 lines to src\lib\pagination\cursor-pagination.ts
+      1 import { Knex } from 'knex';
+      2 
+      3 export interface PaginationParams {
+      4   cursor?: string;
+      5   limit: number;
+      6   sortBy: string; // mapped (snake_case) for the DB
+      7   apiSortBy: string; // original (camelCase) for the client
+      8   sortOrder: 'asc' | 'desc';
+      9 }
+     … +93 lines (ctrl+o to expand)
+
+● Write(src\lib\pagination\query-parser.ts)
+  ⎿  Wrote 48 lines to src\lib\pagination\query-parser.ts
+         ion';t { PaginationParams, FilterParams } from './cursor-paginat
+       2 
+       3 export function parsePaginationQuery(
+       4   query: Record<string, any>,
+       5   columnMap: Record<string, string> = {},
+       6 ): PaginationParams {
+       7   const rawSortBy = (query.sortBy as string) || 'id';
+       8 
+       9   return {
+      10     cursor: query.cursor as string,
+     … +41 lines (ctrl+o to expand)
+
+● Write(src\lib\decorators\permissions.decorator.ts)
+  ⎿  Wrote 15 lines to src\lib\decorators\permissions.decorator.ts
+       2 import { SetMetadata } from '@nestjs/common';
+       3 export const PERMISSIONS_KEY = 'permissions';
+       4 
+       5 /**
+       6  * Tag a route with the permission required to invoke it. Consum
+       7  * `PermissionsGuard` (which lands in Phase 1 alongside the perm
+         ission cache).
+       8  *
+       9  *   @RequirePermissions('orders', 'accept')
+      10  */
+     … +8 lines (ctrl+o to expand)
+
+● Write(src\lib\types\express.d.ts)
+  ⎿  Wrote 22 lines to src\lib\types\express.d.ts
+       1 declare namespace Express {
+       2   interface Request {
+       3     /** JWT payload decoded by JwtAuthGuard. */
+       4     user?: {
+       5       userId: number;
+       6       role: string;
+       7       email: string;
+       8       restaurantId?: number;
+       9       restaurantRole?: string;
+      10       branchIds?: number[];
+     … +15 lines (ctrl+o to expand)
+
+● Now the cache + idempotency interceptors (copied from core verbatim with
+  order-service tweaks):
+
+● Write(src\lib\cache\cache-scope.decorator.ts)
+  ⎿  Wrote 4 lines to src\lib\cache\cache-scope.decorator.ts
+      1 import { SetMetadata } from '@nestjs/common';
+      2 
+      3 export const CacheScope = (scope: 'PUBLIC' | 'PRIVATE') =>
+      4   SetMetadata('cache_scope', scope);
+
+● Write(src\lib\cache\cache.interceptor.ts)
+  ⎿  Wrote 91 lines to src\lib\cache\cache.interceptor.ts
+       1 import {
+       2   CallHandler,
+       3   ExecutionContext,
+       4   Inject,
+       5   Injectable,
+       6 } from '@nestjs/common';
+       7 import {
+       8   CACHE_MANAGER,
+       9   CACHE_TTL_METADATA,
+      10   CacheInterceptor,
+     … +86 lines (ctrl+o to expand)
+
+● Write(src\lib\idempotency\idempotency.decorator.ts)
+  ⎿  Wrote 10 lines to src\lib\idempotency\idempotency.decorator.ts
+       2 import { SetMetadata } from '@nestjs/common';
+       3 export interface IdempotencyOptions {
+       4   strict?: boolean;
+       5 }
+       6 
+       7 export const IDEMPOTENCY_KEY_METADATA = 'idempotency_options';
+       8 
+       9 export const Idempotency = (options: IdempotencyOptions = { stri
+         ct: false }) =>
+      10   SetMetadata(IDEMPOTENCY_KEY_METADATA, options);
+     … +1 line (ctrl+o to expand)
+
+● Write(src\lib\idempotency\idempotency.interceptor.ts)
+  ⎿  Wrote 105 lines to src\lib\idempotency\idempotency.interceptor.ts
+       1 import {
+       2   BadRequestException,
+       3   CallHandler,
+       4   ConflictException,
+       5   ExecutionContext,
+       6   Inject,
+       7   Injectable,
+       8   NestInterceptor,
+       9   ServiceUnavailableException,
+      10 } from '@nestjs/common';
+     … +104 lines (ctrl+o to expand)
+
+● Now the guards. Per user instruction, defer PermissionsGuard until Phase 1 —
+  don't ship it. Ship the rest.
+
+● Write(src\lib\middleware\guards\guard.constants.ts)
+  ⎿  Wrote 11 lines to src\lib\middleware\guards\guard.constants.ts
+       2   UNAUTHENTICATED: 'User not authenticated',
+       3   TOKEN_EXPIRED: 'Token expired or invalid',
+       4   WORKSPACE_ACCESS_DENIED:
+       5     'You do not have access to this restaurant workspace',
+       6   BRANCH_ACCESS_DENIED:
+       7     'You are not assigned to manage this specific branch',
+       8   INVALID_INTERNAL_API_KEY: 'Invalid or missing internal API key
+         ',
+       9   INTERNAL_API_KEY_NOT_CONFIGURED:
+      10     'Internal API key is not configured on the server',
+     … +1 line (ctrl+o to expand)
+  ⎿  You've hit your limit · resets 7:20am (Africa/Cairo)
+     /upgrade to increase your usage limit.
+
+✻ Baked for 9m 56s
