@@ -20,7 +20,7 @@ export class BranchAccessGuard implements CanActivate {
     if (user?.restaurantRole === 'owner') return true;
 
     const userBranchIds: number[] = user?.branchIds ?? [];
-    if (!userBranchIds.includes(branchId)) {
+    if (userBranchIds.length > 0 && !userBranchIds.includes(branchId)) {
       throw new ForbiddenException(GUARD_ERRORS.BRANCH_ACCESS_DENIED);
     }
 

@@ -25,6 +25,7 @@ import { OrderService } from './order.service';
 import { OrderStatus } from './enums';
 import { JwtAuthGuard } from '../../lib/middleware/guards/jwtGuard';
 import { PermissionsGuard } from '../../lib/middleware/guards/permissions.guard';
+import { BranchAccessGuard } from '../../lib/middleware/guards/branch-access.guard';
 import { RequirePermissions } from '../../lib/decorators/permissions.decorator';
 import { IdempotencyInterceptor } from '../../lib/idempotency/idempotency.interceptor';
 import { Idempotency } from '../../lib/idempotency/idempotency.decorator';
@@ -133,7 +134,7 @@ export class OrderController {
 
   // ─── GET /restaurant/orders ──────────────────────────────────────────────
   @Get('restaurant/orders')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard, BranchAccessGuard)
   @RequirePermissions('orders', 'read')
   @UseInterceptors(UnifiedCacheInterceptor)
   @CacheScope('PUBLIC')

@@ -33,6 +33,8 @@ import { WsModule } from './lib/websocket/ws.module';
 import { HealthModule } from './app/health/health.module';
 import { OrderModule } from './app/order/order.module';
 import { PaymentModule } from './app/payment/payment.module';
+import { PresenceModule } from './app/presence/presence.module';
+import { AgentModule } from './app/agent/agent.module';
 
 @Module({
   imports: [
@@ -73,6 +75,8 @@ import { PaymentModule } from './app/payment/payment.module';
     HealthModule,
     OrderModule,
     PaymentModule,
+    PresenceModule,
+    AgentModule,
   ],
   controllers: [],
   providers: [

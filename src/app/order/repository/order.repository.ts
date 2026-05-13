@@ -220,4 +220,111 @@ export class OrderRepository {
 
     return updatedCount;
   }
+
+  // ─── Agent-related queries (Phase 3) ────────────────────────────────────
+
+  /**
+   * Agent task list. Filtered by delivery_agent_id + optional status.
+   * Uses idx_orders_delivery_agent_id_status.
+   */
+  async findByAgent(
+    region: string,
+    agentId: number,
+    statusFilter: string | undefined,
+    params: import('../../../lib/pagination/cursor-pagination').PaginationParams,
+  ): Promise<OrderEntity[]> {
+    const db = this.knex.db(region);
+    let q = db('orders')
+      .select(ORDER_COLUMNS as unknown as string[])
+      .where('delivery_agent_id', agentId);
+    if (statusFilter) {
+      q = q.andWhere('status', statusFilter);
+    }
+    const { applyCursorPagination: applyCursor } = await import(
+      '../../../lib/pagination/cursor-pagination'
+    );
+    const rows = await applyCursor(q, params);
+    return rows.map((r: any) => this.toEntity(r));
+  }
+
+  /**
+   * Find orders actively assigned to this agent (status IN assigned, picked).
+   * Used to check whether the agent can go offline.
+   */
+  async findActiveByAgent(
+    region: string,
+    agentId: number,
+  ): Promise<OrderEntity[]> {
+    const rows = await this.knex
+      .db(region)('orders')
+      .select(ORDER_COLUMNS as unknown as string[])
+      .where('delivery_agent_id', agentId)
+      .whereIn('status', [OrderStatus.ASSIGNED, OrderStatus.PICKED]);
+    return rows.map((r: any) => this.toEntity(r));
+  }
+
+  /**
+   * Atomic assignment: UPDATE orders SET status='assigned', delivery_agent_id=?,
+   * assignment_attempts+1 WHERE id=? AND status='ready'.
+   * Returns null if 0 rows matched (order raced to a different state).
+   */
+  async assignToAgent(
+    region: string,
+    orderId: number,
+    orderCreatedAt: Date,
+    agentId: number,
+    trx: Knex.Transaction,
+  ): Promise<OrderEntity | null> {
+    const rows = await trx('orders')
+      .where({ id: orderId, created_at: orderCreatedAt, status: OrderStatus.READY })
+      .update({
+        status: OrderStatus.ASSIGNED,
+        delivery_agent_id: agentId,
+        assigned_at: trx.fn.now(),
+        last_assignment_at: trx.fn.now(),
+        assignment_attempts: trx.raw('assignment_attempts + 1'),
+        updated_at: trx.fn.now(),
+      })
+      .returning(ORDER_COLUMNS as unknown as string[]);
+    return rows.length > 0 ? this.toEntity(rows[0]) : null;
+  }
+
+  /**
+   * Clear assignment: flip order back to 'ready', remove delivery_agent_id.
+   * Used after reject/timeout so the loop can try the next candidate.
+   */
+  async clearAssignment(
+    region: string,
+    orderId: number,
+    orderCreatedAt: Date,
+    trx: Knex.Transaction,
+  ): Promise<OrderEntity | null> {
+    const rows = await trx('orders')
+      .where({ id: orderId, created_at: orderCreatedAt, status: OrderStatus.ASSIGNED })
+      .update({
+        status: OrderStatus.READY,
+        delivery_agent_id: null,
+        assigned_at: null,
+        updated_at: trx.fn.now(),
+      })
+      .returning(ORDER_COLUMNS as unknown as string[]);
+    return rows.length > 0 ? this.toEntity(rows[0]) : null;
+  }
+
+  /**
+   * Fetch a single order by internal id + created_at (composite PK).
+   * Used by the assignment service to load the order after it has the id.
+   */
+  async findByCompositeId(
+    region: string,
+    orderId: number,
+    orderCreatedAt: Date,
+  ): Promise<OrderEntity | null> {
+    const row = await this.knex
+      .db(region)('orders')
+      .select(ORDER_COLUMNS as unknown as string[])
+      .where({ id: orderId, created_at: orderCreatedAt })
+      .first();
+    return row ? this.toEntity(row) : null;
+  }
 }

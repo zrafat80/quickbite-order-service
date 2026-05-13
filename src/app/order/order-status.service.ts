@@ -38,6 +38,16 @@ const RULES: TransitionRule[] = [
   { from: OrderStatus.PREPARING, to: OrderStatus.CANCELLED, actors: ['restaurant', 'system_admin'], permission: 'orders:cancel', timestampColumn: 'cancelled_at' },
 
   { from: OrderStatus.READY, to: OrderStatus.CANCELLED, actors: ['restaurant', 'system_admin'], permission: 'orders:cancel', timestampColumn: 'cancelled_at' },
+
+  // ─── Delivery phase transitions (Phase 3) ─────────────────────────────────
+  // system/system_admin can assign (auto-assignment or manual admin assign).
+  { from: OrderStatus.READY, to: OrderStatus.ASSIGNED, actors: ['system', 'system_admin'], timestampColumn: 'assigned_at' },
+  // agent picks up the order from the branch.
+  { from: OrderStatus.ASSIGNED, to: OrderStatus.PICKED, actors: ['agent'], timestampColumn: 'picked_at' },
+  // agent delivers to customer (triggers settlement).
+  { from: OrderStatus.PICKED, to: OrderStatus.DELIVERED, actors: ['agent'], timestampColumn: 'delivered_at' },
+  // assigned order can be cancelled by admin/system (e.g. agent went offline, order issue).
+  { from: OrderStatus.ASSIGNED, to: OrderStatus.CANCELLED, actors: ['system', 'system_admin'], timestampColumn: 'cancelled_at' },
 ];
 
 @Injectable()

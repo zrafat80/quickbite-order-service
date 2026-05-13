@@ -285,14 +285,6 @@ export class OrderService {
       throw new ForbiddenException(ORDER_ERRORS.RESTAURANTS_ONLY);
     }
     if (!region) throw new BadRequestException(ORDER_ERRORS.REGION_REQUIRED);
-    if (
-      user.role === 'restaurant_user' &&
-      Array.isArray(user.branchIds) &&
-      user.branchIds.length > 0 &&
-      !user.branchIds.includes(branchId)
-    ) {
-      throw new ForbiddenException(ORDER_ERRORS.FORBIDDEN);
-    }
     const orders = await this.orderRepo.findByBranch(region, branchId, {
       filters: options.filters,
       params: options.params,
@@ -381,7 +373,91 @@ export class OrderService {
       await this.releaseReservedStock(region, current);
     }
 
+    // ── Phase 3 hook: when the kitchen marks order READY, trigger auto-assignment.
+    // Fire-and-forget — failures are logged, not thrown to the kitchen.
+    if (nextStatus === OrderStatus.READY) {
+      this.triggerAutoAssignment(region, updated).catch((err) => {
+        this.logger.error(
+          `auto-assignment trigger failed for order ${updated.publicId}: ${(err as Error).message}`,
+        );
+      });
+    }
+
     return updated;
+  }
+
+  // ─── Internal delivery status transition (Phase 3) ──────────────────────
+  /**
+   * Used by AgentController for delivery transitions (pickup, deliver).
+   * Bypasses the actor/permission checks that the public updateStatus uses.
+   * Settlement is handled here for the DELIVERED transition.
+   */
+  async updateStatusInternal(
+    region: string,
+    orderId: number,
+    orderCreatedAt: Date,
+    nextStatus: OrderStatus,
+    timestampColumn: string | null,
+  ): Promise<OrderEntity> {
+    const trx: Knex.Transaction = await this.knex.db(region).transaction();
+    let updated: OrderEntity;
+    try {
+      updated = await this.orderRepo.updateStatus(
+        region,
+        orderId,
+        orderCreatedAt,
+        nextStatus,
+        timestampColumn,
+        trx,
+      );
+
+      // Settlement on delivered: COD flip + agent_earnings insert
+      if (nextStatus === OrderStatus.DELIVERED && this._assignmentService) {
+        await this._assignmentService.settleDelivered(region, updated, trx);
+      }
+
+      await trx.commit();
+    } catch (err) {
+      await trx.rollback();
+      throw err;
+    }
+
+    // Post-commit Redis cleanup on delivered
+    if (
+      nextStatus === OrderStatus.DELIVERED &&
+      updated.deliveryAgentId &&
+      this._assignmentService
+    ) {
+      await this._assignmentService.postDeliveredRedisCleanup(
+        region,
+        updated.deliveryAgentId,
+        updated.id,
+      );
+    }
+
+    return updated;
+  }
+
+  /**
+   * Lazy setter for AssignmentService to break the circular dependency.
+   * Called by OrderModule's onModuleInit or via forwardRef injection.
+   */
+  private _assignmentService: any = null;
+  setAssignmentService(svc: any): void {
+    this._assignmentService = svc;
+  }
+
+  private async triggerAutoAssignment(
+    region: string,
+    order: OrderEntity,
+  ): Promise<void> {
+    if (!this._assignmentService) {
+      this.logger.warn(
+        'AssignmentService not available; skipping auto-assignment',
+      );
+      return;
+    }
+    await this._assignmentService.tryAssign(region, order.id, order.createdAt);
   }
 
   // ─── helpers exposed to PaymentModule (cross-module via OrderService) ────
