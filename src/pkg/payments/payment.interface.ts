@@ -24,7 +24,21 @@ export interface CreateSessionResult {
 }
 
 export interface RefundInput {
+  /**
+   * Provider's identifier for the original charge transaction. For Kashier this
+   * is `data.transactionId` from the capture webhook (`TX-…`). Stored locally
+   * as `transactions.provider_reference_id`. Some providers' refund APIs key
+   * off this — Kashier's does NOT, see `providerOrderId` below.
+   */
   providerChargeId: string;
+  /**
+   * Provider's order-level identifier — only some providers expose this. For
+   * Kashier it's `data.kashierOrderId` from the capture webhook and the refund
+   * URL is `PUT /orders/{providerOrderId}/`. Stored locally as
+   * `transactions.provider_order_id`. Optional so providers that don't need it
+   * (or synthetic tests) can omit.
+   */
+  providerOrderId?: string;
   amountMinor: number;
   reason?: string;
   metadata?: Record<string, string>;

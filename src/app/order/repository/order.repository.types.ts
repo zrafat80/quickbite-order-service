@@ -33,3 +33,22 @@ export interface ListByBranchOptions {
   filters: FilterParams[];
   params: PaginationParams;
 }
+
+export interface OrderOwnershipView {
+  id: number;
+  publicId: string;
+  customerId: number;
+  restaurantId: number;
+}
+
+/**
+ * Minimal row returned by the sweeper query. The sweeper transitions the
+ * order via OrderService and needs the composite (id, created_at) PK plus
+ * the public id for logging.
+ */
+export interface ExpirableOrderRow {
+  id: number;
+  publicId: string;
+  createdAt: Date;
+  branchId: number;
+}

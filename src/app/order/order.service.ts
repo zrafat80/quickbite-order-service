@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  forwardRef,
   Inject,
   Injectable,
   Logger,
@@ -10,7 +11,11 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { Knex } from 'knex';
 import { OrderRepository } from './repository/order.repository';
-import { CreateOrderInput } from './repository/order.repository.types';
+import {
+  CreateOrderInput,
+  ExpirableOrderRow,
+  OrderOwnershipView,
+} from './repository/order.repository.types';
 import { OrderItemRepository } from './repository/order-item.repository';
 import { OrderStatusService, Actor } from './order-status.service';
 import { OrderEntity } from './entity/order.entity';
@@ -27,6 +32,8 @@ import {
   PaginationParams,
 } from '../../lib/pagination/cursor-pagination';
 import { AuthenticatedUser } from './order.service.types';
+import { PaymentService } from '../payment/payment.service';
+import { PaymentSessionEntity } from '../payment/entity/payment-session.entity';
 
 @Injectable()
 export class OrderService {
@@ -40,6 +47,8 @@ export class OrderService {
     private readonly branchClient: BranchClient,
     private readonly addressClient: AddressClient,
     private readonly permissionCache: PermissionCacheService,
+    @Inject(forwardRef(() => PaymentService))
+    private readonly paymentService: PaymentService,
   ) {}
 
   // ─── POST /orders ─────────────────────────────────────────────────────────
@@ -47,7 +56,11 @@ export class OrderService {
     user: AuthenticatedUser,
     body: CreateOrderRequestDTO,
     idempotencyKey: string | undefined,
-  ): Promise<{ order: OrderEntity; items: OrderItemEntity[] }> {
+  ): Promise<{
+    order: OrderEntity;
+    items: OrderItemEntity[];
+    paymentSession?: PaymentSessionEntity;
+  }> {
     if (user.role !== 'customer') {
       throw new ForbiddenException(ORDER_ERRORS.CUSTOMERS_ONLY);
     }
@@ -202,7 +215,27 @@ export class OrderService {
       }
     }
 
-    return { order, items };
+    // 7. Auto-init Kashier session for online orders so the response carries
+    // a redirectUrl. A failure here does NOT roll back the order — the
+    // customer can retry by calling POST /payments/init.
+    let paymentSession: PaymentSessionEntity | undefined;
+    if (body.paymentMethod === PaymentMethod.ONLINE) {
+      try {
+        paymentSession = await this.paymentService.initForOrderEntity(
+          user,
+          region,
+          order,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `auto-init payment failed for order ${order.publicId}: ${
+            (err as Error).message
+          }; client may retry POST /payments/init`,
+        );
+      }
+    }
+
+    return { order, items, paymentSession };
   }
 
   // ─── GET /orders/{publicId} ───────────────────────────────────────────────
@@ -332,20 +365,204 @@ export class OrderService {
     }
 
     // Release reserved stock OUT-OF-TRX when an order that *had* stock reserved
-    // is cancelled/rejected before the kitchen committed to it. Today that's
-    // only the PLACED -> CANCELLED/REJECTED edge for COD orders (online orders
-    // don't reserve until payment capture, deferred to Phase 2). Once kitchen
-    // accepts, ingredients may be in flight — leave stock decremented and let
-    // restaurant adjust manually.
+    // is cancelled/rejected before the kitchen committed to it. PLACED is the
+    // post-reservation state for both flows:
+    //   - COD: reserved at placeOrder, status -> placed
+    //   - ONLINE: reserved by the post-capture settlement, status -> placed
+    // Once kitchen accepts, ingredients may be in flight — leave stock
+    // decremented and let restaurant adjust manually.
+    // (The auto-cancel-for-out-of-stock path bypasses updateStatus entirely,
+    // so it never hits this branch — correct, because there's nothing to
+    // release in that case.)
     if (
       current.status === OrderStatus.PLACED &&
-      (nextStatus === OrderStatus.CANCELLED || nextStatus === OrderStatus.REJECTED) &&
-      current.paymentMethod === PaymentMethod.COD
+      (nextStatus === OrderStatus.CANCELLED || nextStatus === OrderStatus.REJECTED)
     ) {
       await this.releaseReservedStock(region, current);
     }
 
     return updated;
+  }
+
+  // ─── helpers exposed to PaymentModule (cross-module via OrderService) ────
+  /**
+   * Read-only loader used by PaymentService when initializing a session and
+   * when reconciling webhook events. No access checks — the caller layers
+   * those (init checks the customer, webhook trusts the signature).
+   */
+  async findEntityByPublicId(
+    region: string,
+    publicId: string,
+  ): Promise<OrderEntity | null> {
+    return this.orderRepo.findByPublicId(region, publicId);
+  }
+
+  /**
+   * Lightweight ownership lookup used by PaymentService to satisfy authz
+   * checks and expose the publicId on the payment response without loading
+   * the full OrderEntity.
+   */
+  async findOwnershipById(
+    region: string,
+    id: number,
+    createdAt: Date,
+  ): Promise<OrderOwnershipView | null> {
+    return this.orderRepo.findOwnershipByCompositeId(region, id, createdAt);
+  }
+
+  /**
+   * Webhook-driven transition: pending_payment -> placed. Trusts the caller
+   * (KashierWebhookService runs inside the same trx). Idempotent: returns
+   * the current row unchanged when the order is already past pending_payment.
+   */
+  async markPaymentCaptured(
+    region: string,
+    order: OrderEntity,
+    trx: Knex.Transaction,
+  ): Promise<OrderEntity> {
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      return order;
+    }
+    return this.orderRepo.updateStatus(
+      region,
+      order.id,
+      order.createdAt,
+      OrderStatus.PLACED,
+      null,
+      trx,
+    );
+  }
+
+  /**
+   * Webhook-driven transition for failed online payments: stays in
+   * pending_payment so the customer can retry. Returned for caller logging.
+   */
+  async markPaymentFailed(
+    region: string,
+    order: OrderEntity,
+    _trx: Knex.Transaction,
+  ): Promise<OrderEntity> {
+    void _trx;
+    return order;
+  }
+
+  /**
+   * Sweeper-driven lookup. Defined here so the worker doesn't reach across
+   * modules into OrderRepository.
+   */
+  async findExpirablePendingPayment(
+    region: string,
+    graceMinutes: number,
+    limit: number,
+  ): Promise<ExpirableOrderRow[]> {
+    return this.orderRepo.findExpirablePendingPayment(
+      region,
+      graceMinutes,
+      limit,
+    );
+  }
+
+  /**
+   * Post-capture reservation for online orders. Mirrors the COD reservation
+   * at placement time, but runs after Kashier captures the money. Caller
+   * (KashierWebhookService.postCaptureSettlement) handles the failure path
+   * by auto-cancelling the order and refunding the charge.
+   *
+   * Idempotency key matches the COD reservation pattern so a replay collapses
+   * to the same operation on core-service.
+   */
+  async reserveStockForOnlineCapture(
+    region: string,
+    order: OrderEntity,
+  ): Promise<{
+    ok: boolean;
+    insufficient?: Array<{ productId: number; requested: number; available: number }>;
+  }> {
+    const items = await this.orderItemRepo.findByOrderIds(region, [
+      { orderId: order.id, orderCreatedAt: order.createdAt },
+    ]);
+    if (items.length === 0) {
+      this.logger.error(
+        `reserveStockForOnlineCapture: no items for order ${order.publicId}`,
+      );
+      return { ok: false, insufficient: [] };
+    }
+    try {
+      const result = await this.branchClient.reserveStock(
+        Number(order.branchId),
+        items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+        `reserve:${order.publicId}`,
+      );
+      return result;
+    } catch (err) {
+      this.logger.error(
+        `reserveStock (online capture) failed for order ${order.publicId}: ${
+          (err as Error).message
+        }`,
+      );
+      // Treat infrastructure failures as "reservation failed" — caller will
+      // refund. Better than leaving the order in placed with unreserved stock.
+      return { ok: false };
+    }
+  }
+
+  /**
+   * Auto-cancel path used when reserveStock fails after Kashier captured.
+   * Transitions placed → cancelled (system actor) and skips releaseStock
+   * because nothing was reserved.
+   */
+  async cancelPlacedOrderForStockFailure(
+    region: string,
+    order: OrderEntity,
+  ): Promise<OrderEntity | null> {
+    const trx: Knex.Transaction = await this.knex.db(region).transaction();
+    try {
+      const current = await trx('orders')
+        .select(['id', 'status'])
+        .where({ id: order.id, created_at: order.createdAt })
+        .forUpdate()
+        .first();
+      if (!current || current.status !== OrderStatus.PLACED) {
+        await trx.rollback();
+        return null;
+      }
+      const updated = await this.orderRepo.updateStatus(
+        region,
+        order.id,
+        order.createdAt,
+        OrderStatus.CANCELLED,
+        'cancelled_at',
+        trx,
+      );
+      await trx.commit();
+      this.logger.warn(
+        `order ${order.publicId} auto-cancelled (out of stock after capture)`,
+      );
+      return updated;
+    } catch (err) {
+      await trx.rollback();
+      throw err;
+    }
+  }
+
+  /**
+   * Sweeper-driven cancellation: pending_payment → cancelled when no live
+   * session can carry the order forward. Idempotent — returns early if the
+   * order has already moved off pending_payment (e.g. a late webhook flipped
+   * it to placed between query and update).
+   */
+  async bulkCancelExpiredOrders(
+      region: string,
+      candidates: ExpirableOrderRow[],
+      trx: Knex.Transaction,
+  ): Promise<number> {
+    if (!candidates || candidates.length === 0) return 0;
+
+    // 1. Business Logic: Extract what we need
+    const ids = candidates.map((c) => c.id);
+
+    // 2. Delegate to the Repository
+    return this.orderRepo.bulkCancelPendingPayment(region, ids, trx);
   }
 
   // ─── helpers ──────────────────────────────────────────────────────────────

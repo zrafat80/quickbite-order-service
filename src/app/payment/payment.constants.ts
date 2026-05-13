@@ -1,0 +1,76 @@
+export const PAYMENT_ERRORS = {
+  ORDER_NOT_FOUND: 'Order not found',
+  ORDER_NOT_PENDING_PAYMENT: 'Order is not pending payment',
+  PAYMENT_NOT_FOUND: 'Payment not found',
+  PAYMENT_PROVIDER_DISABLED: 'Payment provider is not enabled',
+  PROVIDER_UNAVAILABLE: 'Payment provider unavailable',
+  REFUND_AMOUNT_TOO_LARGE: 'Refund amount exceeds remaining refundable amount',
+  REFUND_NOT_ELIGIBLE: 'Charge is not eligible for refund',
+  CHARGE_REQUIRED_FOR_REFUND: 'A succeeded charge transaction is required to refund',
+  WEBHOOK_INVALID_SIGNATURE: 'InvalidSignature',
+  WEBHOOK_UNKNOWN_PROVIDER: 'Unknown payment provider',
+  WEBHOOK_UNKNOWN_SESSION: 'Unknown payment session',
+  CUSTOMER_ONLY: 'Only the order customer can initiate a payment',
+  ADMIN_ONLY: 'Only system admin can perform this operation',
+  REGION_REQUIRED: 'X-Region header is required for this operation',
+} as const;
+
+export const PAYMENT_SESSION_COLUMNS = [
+  'id',
+  'region',
+  'order_id',
+  'order_created_at',
+  'provider_id',
+  'provider_session_id',
+  'redirect_url',
+  'amount',
+  'currency',
+  'status',
+  'raw_init_payload',
+  'raw_last_payload',
+  'expires_at',
+  'created_at',
+  'updated_at',
+] as const;
+
+export const TRANSACTION_COLUMNS = [
+  'id',
+  'region',
+  'order_id',
+  'order_created_at',
+  'transaction_type',
+  'method',
+  'provider_id',
+  'provider_reference_id',
+  'provider_order_id',
+  'status',
+  'amount',
+  'currency',
+  'src_acc_id',
+  'dst_acc_id',
+  'is_refunded',
+  'refunded_payment_id',
+  'idempotency_key',
+  'created_at',
+  'updated_at',
+] as const;
+
+export const PAYMENT_PROVIDER_COLUMNS = [
+  'id',
+  'name',
+  'is_enabled',
+  'priority',
+] as const;
+
+export const PAYMENT_WEBHOOK_EVENT_COLUMNS = [
+  'id',
+  'region',
+  'provider_id',
+  'provider_event_id',
+  'event_type',
+  'signature',
+  'payload',
+  'received_at',
+  'processed_at',
+  'process_error',
+] as const;

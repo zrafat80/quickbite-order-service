@@ -21,6 +21,8 @@ export class OrderEntity {
   currency!: string;
   paymentMethod!: PaymentMethod;
   deliveryAgentId!: number | null;
+  assignmentAttempts!: number;
+  lastAssignmentAt!: Date | null;
   createdAt!: Date;
   updatedAt!: Date;
   acceptedAt!: Date | null;

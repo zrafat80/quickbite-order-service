@@ -11,7 +11,8 @@ The schema diverges from the rough draft in `img_2.png` per project guidance:
 - **No `incentives` tables.**
 - **No `events_outbox` table.** This service does not emit outbound async events in this milestone (no analytics consumer; no other consumer needs it). Async with core-service is inbound-only — see `docs/system-design.md` §5.
 - **No `customer_order_index` table.** With country-level shards (one DB per country), customers ordering across regions are rare; if/when needed, the cross-region history view will be implemented as a fan-out at the controller level. Removed to keep the milestone surface area small.
-- New tables added: `deliveries`, `idempotency_keys`, `payment_sessions`, `payment_webhook_events`. **No `core_inbound_events`** — inbound-event dedupe lives in Redis (`core-events:dedupe:<eventId>`, SETNX, 24h TTL), not SQL.
+- **No `deliveries` table.** Per-order delivery state already lives on `orders` (`status`, `delivery_agent_id`, `assigned_at`/`picked_at`/`delivered_at`). The reassignment chain audit is replaced by an `assignment_attempts INT` counter on `orders` (per-attempt who-rejected lives ephemerally in Redis: `assign:reject:<orderId>`).
+- New tables added: `idempotency_keys`, `payment_sessions`, `payment_webhook_events`, `agent_presence`, `agent_earnings`, `restaurant_balances`. **No `core_inbound_events`** — inbound-event dedupe lives in Redis (`core-events:dedupe:<eventId>`, SETNX, 24h TTL), not SQL.
 
 ---
 
@@ -86,7 +87,7 @@ Forbidden in the hot path. The only handled case is:
 
 ### Tables that ARE sharded
 
-`orders`, `order_items`, `transactions`, `restaurant_balances`, `agent_presence`, `agent_earnings`, `deliveries`, `idempotency_keys`, `payment_sessions`, `payment_webhook_events`.
+`orders`, `order_items`, `transactions`, `restaurant_balances`, `agent_presence`, `agent_earnings`, `idempotency_keys`, `payment_sessions`, `payment_webhook_events`.
 
 ### Tables that ARE NOT sharded (replicated to every shard, or live once)
 
@@ -131,8 +132,10 @@ CREATE TABLE orders (
     commission      INT NOT NULL DEFAULT 0,                       -- platform cut, computed at delivery
     currency        TEXT NOT NULL,                                -- 'EGP','SAR'
     payment_method  TEXT NOT NULL CHECK (payment_method IN ('online','cod')),
-    -- delivery
-    delivery_agent_id BIGINT,                                     -- nullable until assigned
+    -- delivery (no separate `deliveries` table; per-order state lives here)
+    delivery_agent_id BIGINT,                                     -- nullable until assigned; current agent for this order
+    assignment_attempts INT NOT NULL DEFAULT 0,                   -- bumped each tryAssign; enforces MAX_REASSIGNMENT_ATTEMPTS
+    last_assignment_at TIMESTAMP NULL,                            -- bookkeeping for the assignment loop watchdog
     -- timestamps
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -318,49 +321,22 @@ Updates use `SELECT ... FOR UPDATE` inside the same transaction as the delivery 
 
 ---
 
-### 3.7 `deliveries`
+### 3.7 ~~`deliveries`~~ — removed
 
-Per-order delivery record. Created when an order is assigned. Allows reassignment history without polluting `orders`.
+Per-order delivery state lives directly on `orders`:
 
-```sql
-CREATE TABLE deliveries (
-    id              BIGSERIAL PRIMARY KEY,
-    region          TEXT NOT NULL,
-    order_id        BIGINT NOT NULL,
-    agent_id        BIGINT NOT NULL,                              -- logical FK -> core.users.id (delivery_agent role)
-    status          TEXT NOT NULL CHECK (status IN (
-                        'assigned','accepted','rejected','picked','delivered','cancelled','reassigned'
-                    )),
-    pickup_lat      DECIMAL(10,7) NOT NULL,                       -- branch coords at assignment time
-    pickup_lng      DECIMAL(10,7) NOT NULL,
-    dropoff_lat     DECIMAL(10,7) NOT NULL,
-    dropoff_lng     DECIMAL(10,7) NOT NULL,
-    distance_meters INT NULL,                                     -- straight-line at assignment, optional refinement later
-    earning_amount  INT NULL,                                     -- minor units, set at delivered
-    currency        TEXT NOT NULL,
-    assigned_at     TIMESTAMP NOT NULL DEFAULT NOW(),
-    accepted_at     TIMESTAMP NULL,
-    rejected_at     TIMESTAMP NULL,
-    picked_at       TIMESTAMP NULL,
-    delivered_at    TIMESTAMP NULL,
-    reassigned_at   TIMESTAMP NULL,
-    reassigned_from BIGINT NULL,                                  -- self-ref to previous delivery row
+| Concept | Where it lives |
+| --- | --- |
+| Current agent for the order | `orders.delivery_agent_id` |
+| Status (`assigned/picked/delivered/cancelled`) | `orders.status` (single status machine) |
+| Lifecycle timestamps (`assigned_at`, `picked_at`, `delivered_at`, `cancelled_at`) | `orders.*_at` |
+| Reassignment count + watchdog | `orders.assignment_attempts`, `orders.last_assignment_at` |
+| Who rejected this attempt | Redis `assign:reject:<orderId>` (TTL=10m, ephemeral) |
+| Pickup coords | Looked up via `BranchClient.getBranch(branchId)` (cached); no need to snapshot — branch coords change at branch-edit time, not per-order |
+| Dropoff coords | `orders.delivery_lat / delivery_lng` |
+| Earning amount | `agent_earnings.amount` (one row per delivered order) |
 
-    CONSTRAINT fk_deliveries_order_id FOREIGN KEY (order_id) REFERENCES orders(id),
-    CONSTRAINT fk_deliveries_reassigned_from FOREIGN KEY (reassigned_from) REFERENCES deliveries(id)
-);
-
--- supports GET /agents/tasks?status=  (per-agent lookup with status filter)
-CREATE INDEX idx_deliveries_agent_id_status_assigned_at ON deliveries (agent_id, status, assigned_at DESC);
--- supports order -> delivery lookup (latest delivery only matters; small cardinality)
-CREATE INDEX idx_deliveries_order_id ON deliveries (order_id);
--- supports reassignment chain traversal
-CREATE INDEX idx_deliveries_reassigned_from ON deliveries (reassigned_from) WHERE reassigned_from IS NOT NULL;
-```
-
-Notes:
-- Reassignment creates a **new** row with `reassigned_from = old_id`, and updates the old row's status to `reassigned`. This keeps a clear audit trail and avoids destructive updates.
-- `orders.delivery_agent_id` is a denormalized pointer to the **current** assigned agent for fast lookup; it's updated when a new delivery is created.
+Rationale (per agreed PNG design): the deliveries table was buying us a reassignment audit chain that we don't need at v1. Counter-only on `orders.assignment_attempts` enforces `MAX_REASSIGNMENT_ATTEMPTS`; per-attempt history lives in WS event logs / structured app logs if forensics are ever needed.
 
 ---
 
@@ -396,29 +372,33 @@ Notes:
 
 ### 3.9 `agent_earnings`
 
-A per-delivery snapshot for reporting. Could be derived from `transactions` + `deliveries` but a denormalized table makes earnings reads cheap.
+A per-order earning snapshot for reporting. Could be derived from `transactions` but a denormalized table makes earnings reads cheap.
+
+Idempotency key is `order_id` (was `delivery_id` in the original draft; that column is gone with the deliveries table). Composite FK targets the partitioned `orders(id, created_at)` parent.
 
 ```sql
 CREATE TABLE agent_earnings (
-    id          BIGSERIAL PRIMARY KEY,
-    region      TEXT NOT NULL,
-    agent_id    BIGINT NOT NULL,
-    order_id    BIGINT NOT NULL,
-    delivery_id BIGINT NOT NULL,
-    amount      INT NOT NULL,                                      -- minor units
-    currency    TEXT NOT NULL,
-    earned_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+    id                  BIGSERIAL PRIMARY KEY,
+    region              TEXT NOT NULL,
+    agent_id            BIGINT NOT NULL,                          -- logical FK -> core.users.id (delivery_agent role)
+    order_id            BIGINT NOT NULL,
+    order_created_at    TIMESTAMP(3) NOT NULL,                    -- partition-key copy, required for the FK
+    amount              INT NOT NULL,                             -- minor units
+    currency            TEXT NOT NULL,
+    earned_at           TIMESTAMP NOT NULL DEFAULT NOW(),
 
-    CONSTRAINT fk_agent_earnings_order_id FOREIGN KEY (order_id) REFERENCES orders(id),
-    CONSTRAINT fk_agent_earnings_delivery_id FOREIGN KEY (delivery_id) REFERENCES deliveries(id),
-    CONSTRAINT uq_agent_earnings_delivery_id UNIQUE (delivery_id)
+    CONSTRAINT fk_agent_earnings_order_id
+      FOREIGN KEY (order_id, order_created_at)
+      REFERENCES orders (id, created_at)
+      ON DELETE CASCADE,
+    CONSTRAINT uq_agent_earnings_order_id UNIQUE (order_id)
 );
 
 -- supports GET /agents/earnings?from=&to=
 CREATE INDEX idx_agent_earnings_agent_earned_at ON agent_earnings (agent_id, earned_at DESC);
 ```
 
-Inserted in the same transaction as `delivery.status='delivered'`. The unique on `delivery_id` makes the operation idempotent.
+Inserted in the same transaction as the `orders.status='delivered'` flip. The unique on `order_id` makes the operation idempotent (a duplicate `deliver` call is a no-op for earnings).
 
 ---
 
@@ -495,19 +475,20 @@ Consumer flow (in `lib/core-events/consumer.ts`):
 ## 4. FK / relationship map (in-shard)
 
 ```
-orders ──(id)── order_items
-orders ──(id)── transactions
-orders ──(id)── payment_sessions
-orders ──(id)── deliveries ──(id)── agent_earnings
+orders ──(id, created_at)── order_items
+orders ──(id, created_at)── transactions
+orders ──(id, created_at)── payment_sessions
+orders ──(id, created_at)── agent_earnings
 transactions ──(id)── transactions  (refunded_payment_id self-ref)
-deliveries ──(id)── deliveries     (reassigned_from self-ref)
 ```
+
+`orders` is partitioned by `created_at`, so every child FK is composite `(order_id, order_created_at) → orders(id, created_at)`.
 
 Logical (cross-service):
 
 ```
-core.users         ← orders.customer_id
-core.users         ← transactions.src_acc_id, dst_acc_id, deliveries.agent_id, agent_presence.agent_id, agent_earnings.agent_id
+core.users         ← orders.customer_id, orders.delivery_agent_id
+core.users         ← transactions.src_acc_id, dst_acc_id, agent_presence.agent_id, agent_earnings.agent_id
 core.restaurants   ← orders.restaurant_id, restaurant_balances.restaurant_id
 core.restaurant_branches ← orders.branch_id
 core.customer_addresses  ← orders.customer_address_id
@@ -532,9 +513,6 @@ core.products      ← order_items.product_id
 | `transactions`         | `idx_transactions_provider_reference_id` (partial) | Webhook de-dup at txn level                         |
 | `transactions`         | `idx_transactions_dst_acc_type_created_at` (partial) | `GET /restaurant/payouts?from&to`                |
 | `transactions`         | `idx_transactions_type_status_created_at`          | Admin reconciliation                                |
-| `deliveries`           | `idx_deliveries_agent_id_status_assigned_at`       | Agent task list                                     |
-| `deliveries`           | `idx_deliveries_order_id`                          | Order detail                                        |
-| `deliveries`           | `idx_deliveries_reassigned_from` (partial)         | Audit chain                                         |
 | `agent_presence`       | `idx_agent_presence_location_gist` (partial)       | Auto-assignment proximity scan                      |
 | `agent_presence`       | `idx_agent_presence_last_seen_at` (partial)        | Stale online cleanup job                            |
 | `agent_earnings`       | `idx_agent_earnings_agent_earned_at`               | `GET /agents/earnings?from&to`                      |
@@ -548,17 +526,18 @@ No speculative indexes. No `CREATE INDEX` lands without a query path comment in 
 
 Each migration creates a single coherent unit. Order matters because of FK dependencies (in-shard).
 
-1. `20260418000010_create_payment_providers.ts`        — seed `kashier`, `cod`.
-2. `20260418000020_create_orders.ts`                   — `orders` + indexes.
-3. `20260418000030_create_order_items.ts`              — `order_items` + FK + index.
-4. `20260418000040_create_payment_sessions.ts`         — `payment_sessions` + indexes.
-5. `20260418000050_create_transactions.ts`             — `transactions` + indexes.
-6. `20260418000060_create_restaurant_balances.ts`      — `restaurant_balances`.
-7. `20260418000070_create_deliveries.ts`               — `deliveries` + indexes.
-8. `20260418000080_create_agent_presence.ts`           — extension PostGIS, `agent_presence` + GIST index.
-9. `20260418000090_create_agent_earnings.ts`           — `agent_earnings` + indexes.
-10. `20260418000100_create_idempotency_keys.ts`        — `idempotency_keys`.
-11. `20260418000110_create_payment_webhook_events.ts`  — `payment_webhook_events`.
+1. `20260507000020_create_orders.ts`                   — `orders` (partitioned) + indexes + delivery columns (`delivery_agent_id`, `assignment_attempts`, `last_assignment_at`).
+2. `20260507000030_create_order_items.ts`              — `order_items` + composite FK + index.
+3. `20260507000100_create_idempotency_keys.ts`         — `idempotency_keys`.
+4. `20260510000010_create_payment_providers.ts`        — seed `kashier`, `cod`.
+5. `20260510000040_create_payment_sessions.ts`         — `payment_sessions` + indexes.
+6. `20260510000050_create_transactions.ts`             — `transactions` + indexes.
+7. `20260510000110_create_payment_webhook_events.ts`   — `payment_webhook_events`.
+8. `…_create_restaurant_balances.ts`                   — `restaurant_balances` (Phase 3 migration).
+9. `…_create_agent_presence.ts`                        — extension PostGIS, `agent_presence` + GIST + partial btree (Phase 3).
+10. `…_create_agent_earnings.ts`                       — `agent_earnings` + composite FK + index (Phase 3).
+
+(No `deliveries` migration — see §3.7. No core-event dedupe table — Redis.)
 
 (Core-event dedupe is Redis, not a migration.)
 

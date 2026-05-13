@@ -36,6 +36,8 @@ export const ORDER_COLUMNS = [
   'currency',
   'payment_method',
   'delivery_agent_id',
+  'assignment_attempts',
+  'last_assignment_at',
   'created_at',
   'updated_at',
   'accepted_at',

@@ -70,7 +70,28 @@
       "Bash(disown)",
       "WebFetch(domain:developers.kashier.io)",
       "WebSearch",
-      "WebFetch(domain:www.kashier.io)"
+      "WebFetch(domain:www.kashier.io)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(REGION=eg npx knex migrate:list --knexfile knexfile.ts)",
+      "Bash(REGION=eg npx knex migrate:latest --knexfile knexfile.ts)",
+      "Bash(tee play/logs/order.log)",
+      "Bash(taskkill *)",
+      "Bash(tee play/logs/payment-test.log)",
+      "Bash(ngrok version *)",
+      "Bash(where ngrok *)",
+      "Bash(wmic process *)",
+      "Bash(break)",
+      "Bash(ngrok config *)",
+      "Bash(grep -q \"OPEN THIS URL\" play/logs/webhook-test.log)",
+      "Bash(exit 0)",
+      "Bash(grep -q \"TEST ERROR\\\\|init failed\" play/logs/webhook-test.log)",
+      "Bash(exit 1)",
+      "Bash(> play/logs/dev.log)",
+      "Bash(tee play/logs/e2e-run.log)",
+      "Bash(npx knex *)",
+      "Bash(PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d order_service_eg -c \"SELECT column_name FROM information_schema.columns WHERE table_name='transactions' AND column_name='provider_order_id';\")",
+      "Bash(tee play/logs/refund-live-2.log)",
+      "Bash(findstr /R \"^.env\")"
     ]
   }
 }

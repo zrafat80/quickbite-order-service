@@ -276,98 +276,140 @@ All of the following go under `/api/internal/*` (guarded by the API-key middlewa
 
 ---
 
-## Phase 3 — Deliveries module
+## Phase 3 — Deliveries + Agents (compressed)
+
+> **Compressed from the original Phase 3 + Phase 4.** Per the agreed DB design (PNG `img_2.png`) there is **no `deliveries` table** — the order's existing status machine (`assigned → picked → delivered`) plus `orders.delivery_agent_id` already covers the per-order delivery state. The only audit we lose is the reassignment chain, which we replace with a counter on `orders` (per user decision: counter-only, no per-attempt audit table). Reasons for compression: agents and deliveries share the assignment/settlement loop end-to-end and shipping them apart would force a temporary Postgres-only assignment scaffold that's thrown away one phase later.
+>
+> **Commission is deferred to Phase 5 (finance).** The `orders.commission` column stays at `0` and the settlement trx in this phase does NOT insert the `transactions(commission)` row or update `restaurant_balances`. Phase 3's settlement only flips COD `transactions(cod_collection)` to `succeeded` and inserts the `agent_earnings` row.
 
 ### Migrations
 
-- `20260418000060_create_restaurant_balances.ts`.
-- `20260418000070_create_deliveries.ts`.
+- **Edit in place: `20260507000020_create_orders.ts`** — add `assignment_attempts INT NOT NULL DEFAULT 0` and `last_assignment_at TIMESTAMP(3) NULL`. Existing data is droppable.
+- `…_create_agent_presence.ts` — PostGIS extension + single-row-per-agent + partial GIST + partial btree on `last_seen_at`.
+- `…_create_agent_earnings.ts` — keyed by `order_id` (UNIQUE), composite FK `(order_id, order_created_at) → orders(id, created_at)`.
+- `…_create_restaurant_balances.ts` — schema lands now per `database-design.md §3.6`; **no balance writes happen until Phase 5.** The table exists so the finance phase has nothing to migrate.
+
+### Redis keys
+
+| Key | Type | Purpose | Updated by |
+| --- | --- | --- | --- |
+| `presence:geo:<region>` | GEO zset | online agents' coordinates | online/offline/ping |
+| `presence:meta:<region>:<agentId>` | hash | `last_seen_at`, `active_orders`, `is_online` | online/offline/ping + assign/release |
+| `presence:busy:<region>` | set | mirror of `active_orders > 0` for fast filtering | assign/release |
+| `assign:reject:<orderId>` | set + TTL=10m | agents who rejected/timed-out for this attempt loop | assignment loop |
+
+Stale-presence cleanup happens lazily inside the request path (assignment scan ZREMs/SREMs anyone past `PRESENCE_STALE_SEC`). No background worker until Phase 7.
 
 ### Code
 
-1. Entities: `DeliveryEntity`, `RestaurantBalanceEntity`.
-2. Request DTOs: `AssignDeliveryRequestDTO`, `UpdateDeliveryStatusRequestDTO`.
-3. Response DTOs: `DeliveryResponseDTO`, `DeliveryStatusResponseDTO`, `DeliverySummaryResponseDTO`.
-4. Repositories (`@Injectable()`): `delivery.repository.ts`, `restaurant-balance.repository.ts` (with `forUpdate` helper).
-5. `assignment.service.ts` — implements Deliveries.md §2 algorithm. Uses a **Postgres-only** candidate scan in this phase (Redis presence layer arrives in Phase 4).
-6. `delivery.service.ts` — `assign`, `reassign`, `updateStatus`. `delivered` runs the **settlement trx** (see Restaurant-finance.md §7 / Deliveries.md §5).
-7. Controller + `delivery.module.ts`; add to `app.module.ts`.
-8. **Cross-module hook**: `OrderService.updateStatus` for target `ready` enqueues `AssignmentService.tryAssign(orderId)` in-process after commit (DeliveryModule exports `AssignmentService`; OrderModule imports `DeliveryModule`).
+1. Migrations above (each in every region).
+2. Entities: `AgentPresenceEntity`, `AgentEarningEntity`. **No `DeliveryEntity`** — delivery state lives on `OrderEntity`.
+3. Request DTOs:
+   - `PresenceOnlineRequestDTO { lat: number; lng: number }` (also used for `ping`).
+   - `AssignAgentRequestDTO { agentId: number }` (admin manual assign).
+   - `UpdateDeliveryStatusRequestDTO { status: 'accept'|'pickup'|'deliver'|'reject' }` (agent).
+4. Response DTOs: `AgentEarningsResponseDTO`, `DeliveryTaskResponseDTO`, `AssignmentResponseDTO` (returns the order with `delivery_agent_id` + `assigned_at`).
+5. Repositories (`@Injectable()`):
+   - `agent-presence.repository.ts` — UPSERT, `findOnlineNearestPostgres(region, lat, lng, k, staleSec)` (PostGIS GIST fallback when Redis is empty), `claimForUpdate(agentId, trx)`.
+   - `agent-earning.repository.ts` — `bulkInsert` (idempotent on `order_id`), `findByAgent(agentId, range, params)`, `sumByAgent(agentId, range)`.
+6. `presence.service.ts` — UPSERT Postgres + write-through Redis (`GEOADD`, `HMSET`, `SADD`/`SREM`).
+7. `earning.service.ts` — list + sum, cursor pagination, archive routing in Phase 7.
+8. `agent.service.ts` — `listTasks(agentId, status?, params)` backed by `OrderRepository.findByAgent(...)` (status filter `assigned|accepted|picked|delivered`).
+9. **`assignment.service.ts` (lives inside `OrderModule`)** — implements the Smart Assignment Loop:
+   1. Resolve branch coords via `BranchClient.getBranch(branchId)` (cache hit).
+   2. `ZRANGEBYSCORE`-style `GEOSEARCH presence:geo:<region> FROMLONLAT … BYRADIUS <ASSIGNMENT_RADIUS_METERS> m ASC COUNT <ASSIGNMENT_CANDIDATE_K>`.
+   3. Pipeline `HMGET presence:meta:<region>:<agentId> last_seen_at active_orders` for the K candidates.
+   4. Drop: stale (`now - last_seen_at > PRESENCE_STALE_SEC`, default 300s), already on the order's `assign:reject:<orderId>` set, or offline. Lazily `ZREM`/`SREM` the stale ones.
+   5. **Sort in JS by `(active_orders ASC, distance ASC)`**.
+   6. For `array[0]`:
+      - `trx.transaction()`. `SELECT ... FROM agent_presence WHERE agent_id = ? FOR UPDATE`. Verify `is_online=TRUE`, `last_seen > NOW() - PRESENCE_STALE_SEC`.
+      - `UPDATE orders SET status='assigned', delivery_agent_id=?, assigned_at=NOW(), assignment_attempts = assignment_attempts + 1, last_assignment_at = NOW() WHERE id=? AND status='ready' RETURNING *`. If the WHERE clause matches 0 rows the order moved (raced) → rollback + abort.
+      - `HINCRBY presence:meta:<region>:<agent> active_orders 1`; `SADD presence:busy:<region> <agent>`.
+      - Commit.
+      - WS: `wsPublisher.emit('agent:<id>', 'task.assigned', taskDto)`.
+      - Wait for the agent's PATCH within `AGENT_ACCEPT_TIMEOUT_SEC` (in-process timer; the agent calls `PATCH /orders/:publicId/delivery-status {accept}`).
+   7. On reject/timeout: `SADD assign:reject:<orderId> <agentId>` (TTL 600s), `HINCRBY active_orders -1`, `SREM presence:busy` if zero, `UPDATE orders SET status='ready', delivery_agent_id=NULL` in trx, retry `array[1]`.
+   8. After exhausting candidates **and** `assignment_attempts >= MAX_REASSIGNMENT_ATTEMPTS`: emit `wsPublisher.emit('admin:<region>:alerts', 'assignment.unassigned', {orderId})`, leave order at `ready`.
+10. **Cross-module hook**: `OrderService.updateStatus` for target `READY` (after commit) calls `AssignmentService.tryAssign(orderId)` in-process. Failures are logged and do NOT roll back the kitchen's status flip.
+11. Settlement on `delivered` (in the same trx as the status flip):
+    - `UPDATE orders SET status='delivered', delivered_at=NOW()`.
+    - For COD: `UPDATE transactions SET status='succeeded' WHERE order_id=? AND transaction_type='cod_collection' AND status='pending'`. (Online is already `charge` + `succeeded` from the webhook.)
+    - `INSERT INTO agent_earnings (region, agent_id, order_id, order_created_at, amount, currency)` — UNIQUE on `order_id` makes it idempotent. Amount = `floor(branch.deliveryFee × AGENT_SHARE_RATE)` (env, default 1.0 today; revisit when commission lands in Phase 5).
+    - `// Phase 5 (finance):` insert `transactions(commission)`, `UPDATE restaurant_balances.balance += subtotal - commission`. Marked with that comment in code.
+    - Outside the trx: `HINCRBY presence:meta active_orders -1`, `SREM presence:busy` if zero, `DEL assign:reject:<orderId>`.
+12. Endpoints (no `/deliveries/*` — delivery actions live on the order):
+    - `POST /orders/:publicId/assign` — admin manual; `{ agentId }`. Skips the candidate loop, runs the trx block from step 9.
+    - `POST /orders/:publicId/reassign` — admin; flips current attempt to a virtual reject (`assign:reject` add) and re-runs the loop.
+    - `PATCH /orders/:publicId/delivery-status` — agent only; `{ status }`. Transitions handled by `OrderStatusService` (extended with the agent rules table from `business-logic/deliveries.md §4`). On `deliver`: settlement trx. On `reject`: triggers reassignment.
+    - `POST /agents/presence/{online|offline|ping}`, `GET /agents/tasks?status=`, `GET /agents/earnings?from=&to=` (per `business-logic/agents.md`).
+13. Apply guards:
+    - Agent endpoints: `@UseGuards(JwtAuthGuard)` + service-side assertion `req.user.role === 'delivery_agent'`.
+    - Admin assign/reassign: `@UseGuards(JwtAuthGuard, PermissionsGuard) @RequirePermissions('deliveries', 'assign')`.
+
+### Concurrency notes
+
+- The `SELECT agent_presence FOR UPDATE` + `UPDATE orders ... WHERE status='ready'` in one trx handles two concurrent `tryAssign` calls picking the same `array[0]` agent — the loser sees 0-row update and falls through to `array[1]`.
+- The `assign:reject` Redis set carries a TTL longer than the assignment loop budget so a long-tailed retry can't reuse a just-rejected agent.
+- A lightweight Lua-script atomic claim is intentionally **not** used for v1; it's the documented next step if contention shows up.
 
 ### Core-service changes required
 
-- `GET /api/internal/users/:id?role=delivery_agent` (or a dedicated `GET /api/internal/agents/:id`) — returns `{ id, name, phone }` for display on the customer app when a delivery is assigned. Same API-key guard.
+- `GET /api/internal/agents/:id` — returns `{ id, name, phone }` for the customer-facing assignment payload. API-key guard.
+- Confirm `delivery_agent` is a `system_role` (already seeded in core).
+- Confirm the `deliveries:assign` permission seeded in Phase 0 maps to `system_admin` only.
 
 ### Acceptance
 
-- Order moved to `ready` triggers a delivery assignment (manual path with `agentId` works; auto path uses Postgres GIST until Phase 4).
-- Agent flow `accept → picked → delivered` works.
-- On `delivered`: `restaurant_balances.balance` increases by `subtotal - commission`; `transactions(commission)` row exists; `agent_earnings` row will be inserted in Phase 4 (stubbed here).
-- COD: pending `cod_collection` flips to `succeeded`.
-- Reassignment increments the chain; `MAX_REASSIGNMENT_ATTEMPTS` enforced.
+- An order moved to `ready` triggers `AssignmentService.tryAssign(orderId)` after commit; with one online agent in radius, the order ends up `assigned` with `delivery_agent_id` set and `assignment_attempts=1`.
+- WS `task.assigned` lands on `agent:<id>`.
+- Agent `PATCH /orders/:publicId/delivery-status {accept}` flips status to `accepted`. `pickup` → `picked`. `deliver` → `delivered` and inserts `agent_earnings(order_id=…)`. Re-running the same `deliver` call is a no-op for earnings (UNIQUE on `order_id`).
+- For COD: the prior `transactions(type='cod_collection', status='pending')` row flips to `succeeded` in the same trx as `delivered`.
+- For online: no new transaction is created on `delivered` (charge already exists).
+- `restaurant_balances.balance` is **not** modified in this phase. `transactions(type='commission')` is **not** inserted. Both deferred to Phase 5.
+- `POST /agents/presence/online` UPSERTs Postgres and registers the agent in `presence:geo:<region>` + `presence:meta:<region>:<agentId>`.
+- Agent reject / accept-timeout: order returns to `ready`, `delivery_agent_id` cleared, agent added to `assign:reject:<orderId>`, loop picks the next candidate, `assignment_attempts` increments per attempt.
+- Three full attempts with no acceptance → `assignment.unassigned` WS to admin channel; order stays `ready`.
+- Postgres GIST fallback: with Redis flushed, the assignment scan still finds candidates via `agent_presence` and the partial GIST index `idx_agent_presence_location_gist`.
+- Going offline while in `picked` → 409 `Cannot go offline with active pickup`. Going offline while `assigned/accepted` → triggers reassignment.
+- `GET /agents/tasks?status=assigned` returns the agent's open tasks; cursor pagination works. Backed by `idx_orders_delivery_agent_id_status`.
+- `GET /agents/earnings?from=&to=` returns `agent_earnings` rows + sum, paginated.
 
 ---
 
-## Phase 4 — Agents module
+## Phase 4 — Restaurant Finance module
 
-### Migrations
+> Renumbered from the original Phase 5 because Deliveries+Agents merged into Phase 3. This phase wires up the commission + balance writes that Phase 3 deferred.
 
-- `20260418000080_create_agent_presence.ts` (PostGIS extension + table + partial GIST index).
-- `20260418000090_create_agent_earnings.ts`.
-
-### Code
-
-1. Entities: `AgentPresenceEntity`, `AgentEarningEntity`.
-2. Request DTOs: `PresenceOnlineRequestDTO` (lat, lng); reuse for ping.
-3. Response DTOs: `AgentEarningsResponseDTO`, `DeliveryTaskResponseDTO`.
-4. Repositories (`@Injectable()`): `agent-presence.repository.ts` (UPSERT), `agent-earning.repository.ts`.
-5. `presence.service.ts` — UPSERT Postgres; **also** maintain Redis (`presence:geo:<region>`, `presence:meta:<region>:<agentId>`, `presence:busy`).
-6. `earning.service.ts` — list + sum.
-7. `agent.service.ts` — task list (via the injected `DeliveryRepository`).
-8. Controllers + `agent.module.ts`; add to `app.module.ts`.
-9. **Plug Redis presence into `AssignmentService`**: switch the candidate scan to Redis with Postgres fallback. Add `agent_earnings` insert into the `delivered` settlement trx from Phase 3.
-10. Stale-presence cleanup inside the request path only (no background worker yet — Phase 7 covers workers).
-
-### Core-service changes required
-
-- Confirm `delivery_agent` as a `system_role` (already exists per `core-service`'s seed).
-- Nothing new — all agent identity lookups use the `GET /api/internal/agents/:id` added in Phase 3.
-
-### Acceptance
-
-- Presence ping updates both Postgres and Redis.
-- Going offline rejects if the agent is in an active delivery.
-- `GET /agents/tasks` and `/agents/earnings` work; cursor pagination respected.
-- Auto-assignment reads from Redis in the hot path; Postgres fallback works when Redis is cold.
-
----
-
-## Phase 5 — Restaurant Finance module
-
-No new migrations.
+No new migrations (`restaurant_balances` already created in Phase 3).
 
 ### Code
 
-1. Entities reuse `RestaurantBalanceEntity` and `TransactionEntity`.
+1. Entities: `RestaurantBalanceEntity`, reuse `TransactionEntity`.
 2. DTOs: `RestaurantBalanceResponseDTO`, `PayoutResponseDTO`, `CreatePayoutRequestDTO`.
-3. Repositories: extend `transaction.repository.ts` with `findPayouts(restaurantId, from, to, paginationParams)`.
+3. Repositories: `restaurant-balance.repository.ts` (`upsertForUpdate`, `incrementBalance`); extend `transaction.repository.ts` with `findPayouts(restaurantId, from, to, paginationParams)`.
 4. `restaurant-finance.service.ts` — `getBalance`, `listPayouts`, `recordPayout` (admin).
-5. Controller + `restaurant-finance.module.ts` for `/restaurant/balance`, `/restaurant/payouts`; add to `app.module.ts`.
-6. `@UseInterceptors(IdempotencyInterceptor) @Idempotency({ strict: true })` on `POST /restaurant/payouts`.
+5. **Wire commission into the delivered settlement trx** (in `OrderService.markDelivered` or `AssignmentService.settle`):
+   - Compute `commission = floor(subtotal × branch.commissionRate)`. Update `orders.commission`.
+   - `INSERT transactions (type='commission', method='system', status='succeeded', amount=commission, src=ownerId, dst=NULL)`.
+   - `UPDATE restaurant_balances SET balance = balance + (subtotal - commission)` with `FOR UPDATE` row lock.
+   - All inside the same trx as the existing Phase 3 settlement (COD flip + agent_earnings insert).
+6. Controller + `restaurant-finance.module.ts` for `/restaurant/balance`, `/restaurant/payouts`; add to `app.module.ts`.
+7. `@UseInterceptors(IdempotencyInterceptor) @Idempotency({ strict: true })` on `POST /restaurant/payouts`.
 
 ### Core-service changes required
 
-- The `finance:read` permission must already be seeded (from Phase 0 core seed). Mapped to `owner` and `branch_manager`.
+- `finance:read` permission already seeded (from Phase 0 core seed). Mapped to `owner` and `branch_manager`.
 
 ### Acceptance
 
+- A new `delivered` order now also writes a `transactions(commission)` row and increments `restaurant_balances.balance` by `subtotal - commission` in the same trx as the agent earning.
 - Owner and manager can read balance + payouts; staff cannot.
 - Admin can record a payout; balance decrements; same idempotency key returns the same payout.
 - Payout > balance → 409 `InsufficientBalance`.
 
 ---
 
-## Phase 6 — WebSocket event wiring
+## Phase 5 — WebSocket event wiring
 
 The WS server, hub, auth, and publisher already exist from Phase 0. This phase wires **events** from existing services into that publisher.
 
@@ -379,9 +421,9 @@ Services inject `WsPublisher` (exported by `WsModule`) and call `wsPublisher.emi
 2. **In `PaymentService` / `KashierWebhookService`**:
    - On `captured`: `customer:<id>:order.status_changed` (to `placed`) and `branch:<id>:order.created`.
    - On `failed`: `customer:<id>:payment.failed`.
-3. **In `DeliveryService`**:
-   - `assign` → `agent:<id>:task.assigned`.
-   - `updateStatus` → `customer:<id>` and `branch:<id>` `delivery.status_changed`.
+3. **In `AssignmentService` / `OrderService` (delivery actions)**:
+   - `tryAssign` (after commit) → `agent:<id>:task.assigned`; on exhaustion → `admin:<region>:alerts:assignment.unassigned`.
+   - `PATCH /orders/:publicId/delivery-status` → `customer:<id>` and `branch:<id>` `delivery.status_changed`.
 4. **In `PresenceService`**:
    - During `ping`, if the agent has an active delivery, publish `customer:<id>:delivery.position`.
 5. **Channel-permission guards**:
@@ -399,7 +441,7 @@ Services inject `WsPublisher` (exported by `WsModule`) and call `wsPublisher.emi
 
 ---
 
-## Phase 7 — Cold archival worker (the only background worker)
+## Phase 6 — Cold archival worker (the only background worker)
 
 ### Goal
 
@@ -412,7 +454,7 @@ Every night, move rows whose `created_at` is in a **prior year** from the hot cl
 ### Code
 
 1. `lib/jobs/jobs.module.ts` + `archival.worker.ts` — one `@Injectable()` worker scheduled nightly via `@nestjs/schedule`'s `@Cron(...)`. Guards each run with a Redis lock `archival:<region>:lock` to avoid duplicate runs if multiple processes start. Iterates the configured region list inside the cron handler:
-   - Walk tables in FK-safe order: `agent_earnings → deliveries → payment_webhook_events → payment_sessions → transactions → order_items → orders`.
+   - Walk tables in FK-safe order: `agent_earnings → payment_webhook_events → payment_sessions → transactions → order_items → orders`. (No `deliveries` table — see Phase 3.)
    - For each table, loop in batches of 1000 rows where `created_at < date_trunc('year', NOW())`:
      - Begin trx on hot + trx on archive.
      - `SELECT ... FROM hot WHERE id IN (...)` / `INSERT ... INTO archive` / `DELETE FROM hot WHERE id IN (...)`.
@@ -442,14 +484,14 @@ Every night, move rows whose `created_at` is in a **prior year** from the hot cl
 ## Build cadence summary
 
 ```
-Phase 0  Scaffolding (WS base, core-client base, inbound core webhook route)
-Phase 1  Orders                      ───►  COD orders end-to-end
-Phase 2  Payments + Kashier          ───►  online orders end-to-end
-Phase 3  Deliveries + settlement     ───►  full money flow on delivered
-Phase 4  Agents + presence           ───►  auto-assignment on Redis
-Phase 5  Restaurant finance          ───►  owner/admin financial views
-Phase 6  WebSocket event wiring      ───►  real-time everywhere
-Phase 7  Cold archival worker        ───►  hot DB stays small
+Phase 0  Scaffolding (WS base, core-client base, inbound core RabbitMQ consumer)
+Phase 1  Orders                                ───►  COD orders end-to-end
+Phase 2  Payments + Kashier                    ───►  online orders end-to-end
+Phase 3  Deliveries + Agents (compressed)      ───►  auto-assignment + agent earnings on delivered
+                                                    (commission + balance deferred to Phase 4)
+Phase 4  Restaurant finance                    ───►  full money flow + owner/admin financial views
+Phase 5  WebSocket event wiring                ───►  real-time everywhere
+Phase 6  Cold archival worker                  ───►  hot DB stays small
 ```
 
 Each phase is shippable. No phase mixes modules. No phase is started until the previous phase's acceptance is checked AND the matching **"Core-service changes required"** for that phase (listed inline above) are in place.

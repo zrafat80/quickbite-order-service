@@ -32,6 +32,7 @@ import { PermissionsModule } from './lib/middleware/guards/permissions.module';
 import { WsModule } from './lib/websocket/ws.module';
 import { HealthModule } from './app/health/health.module';
 import { OrderModule } from './app/order/order.module';
+import { PaymentModule } from './app/payment/payment.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { OrderModule } from './app/order/order.module';
     // Domain modules
     HealthModule,
     OrderModule,
+    PaymentModule,
   ],
   controllers: [],
   providers: [

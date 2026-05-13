@@ -1,6 +1,7 @@
 import { OrderEntity } from '../entity/order.entity';
 import { OrderItemEntity } from '../entity/order-item.entity';
 import { OrderStatus, PaymentMethod } from '../enums';
+import { PaymentSessionEntity } from '../../payment/entity/payment-session.entity';
 
 export class OrderItemResponseDTO {
   productId!: number;
@@ -42,6 +43,13 @@ export class OrderResponseDTO {
     currency: string;
   };
   items!: OrderItemResponseDTO[];
+  // Present only when paymentMethod === 'online' and the auto-init succeeded.
+  payment?: {
+    sessionId: number;
+    providerSessionId: string;
+    redirectUrl: string;
+    expiresAt: string | null;
+  };
   createdAt!: string;
   acceptedAt!: string | null;
   rejectedAt!: string | null;
@@ -54,6 +62,7 @@ export class OrderResponseDTO {
   static from(
     order: OrderEntity,
     items: OrderItemEntity[],
+    paymentSession?: PaymentSessionEntity,
   ): OrderResponseDTO {
     const dto = new OrderResponseDTO();
     dto.id = order.publicId;
@@ -75,6 +84,16 @@ export class OrderResponseDTO {
       currency: order.currency,
     };
     dto.items = items.map(OrderItemResponseDTO.from);
+    if (paymentSession) {
+      dto.payment = {
+        sessionId: Number(paymentSession.id),
+        providerSessionId: paymentSession.providerSessionId,
+        redirectUrl: paymentSession.redirectUrl,
+        expiresAt: paymentSession.expiresAt
+          ? new Date(paymentSession.expiresAt).toISOString()
+          : null,
+      };
+    }
     dto.createdAt = toIso(order.createdAt);
     dto.acceptedAt = toIsoOrNull(order.acceptedAt);
     dto.rejectedAt = toIsoOrNull(order.rejectedAt);

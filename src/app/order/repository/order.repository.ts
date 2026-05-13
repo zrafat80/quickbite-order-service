@@ -10,8 +10,10 @@ import {
 } from '../../../lib/pagination/cursor-pagination';
 import {
   CreateOrderInput,
+  ExpirableOrderRow,
   ListByBranchOptions,
   ListByCustomerOptions,
+  OrderOwnershipView,
 } from './order.repository.types';
 
 @Injectable()
@@ -42,6 +44,8 @@ export class OrderRepository {
       currency: row.currency,
       paymentMethod: row.payment_method as PaymentMethod,
       deliveryAgentId: row.delivery_agent_id ? Number(row.delivery_agent_id) : null,
+      assignmentAttempts: Number(row.assignment_attempts ?? 0),
+      lastAssignmentAt: row.last_assignment_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       acceptedAt: row.accepted_at,
@@ -95,6 +99,63 @@ export class OrderRepository {
     return row ? this.toEntity(row) : null;
   }
 
+  /**
+   * Sweeper query: returns orders still in `pending_payment` past the grace
+   * window with NO active session. "Active" mirrors
+   * PaymentSessionRepository.findLatestActiveByOrderId — status in
+   * (initialized, pending, authorized) AND not past expires_at.
+   */
+  async findExpirablePendingPayment(
+    region: string,
+    graceMinutes: number,
+    limit: number,
+  ): Promise<ExpirableOrderRow[]> {
+    const db = this.knex.db(region);
+    const rows = await db('orders as o')
+      .select(['o.id', 'o.public_id', 'o.created_at', 'o.branch_id'])
+      .where('o.region', region)
+      .andWhere('o.status', OrderStatus.PENDING_PAYMENT)
+      .andWhereRaw(`o.created_at + (? || ' minutes')::interval < NOW()`, [
+        graceMinutes,
+      ])
+      .andWhereRaw(
+        `NOT EXISTS (
+          SELECT 1 FROM payment_sessions s
+          WHERE s.order_id = o.id
+            AND s.order_created_at = o.created_at
+            AND s.status IN ('initialized', 'pending', 'authorized')
+            AND (s.expires_at IS NULL OR s.expires_at > NOW())
+        )`,
+      )
+      .orderBy('o.created_at', 'asc')
+      .limit(limit);
+    return rows.map((r: any) => ({
+      id: Number(r.id),
+      publicId: r.public_id,
+      createdAt: r.created_at,
+      branchId: Number(r.branch_id),
+    }));
+  }
+
+  async findOwnershipByCompositeId(
+    region: string,
+    id: number,
+    createdAt: Date,
+  ): Promise<OrderOwnershipView | null> {
+    const row = await this.knex
+      .db(region)('orders')
+      .select(['id', 'public_id', 'customer_id', 'restaurant_id'])
+      .where({ id, created_at: createdAt })
+      .first();
+    if (!row) return null;
+    return {
+      id: Number(row.id),
+      publicId: row.public_id,
+      customerId: Number(row.customer_id),
+      restaurantId: Number(row.restaurant_id),
+    };
+  }
+
   async findByCustomer(
     region: string,
     customerId: number,
@@ -141,5 +202,22 @@ export class OrderRepository {
       .update(update)
       .returning(ORDER_COLUMNS as unknown as string[]);
     return this.toEntity(row);
+  }
+  async bulkCancelPendingPayment(
+      region: string,
+      ids: number[],
+      trx: Knex.Transaction,
+  ): Promise<number> {
+    if (!ids || ids.length === 0) return 0;
+
+    const updatedCount = await trx('orders')
+        .whereIn('id', ids)
+        .andWhere('status', OrderStatus.PENDING_PAYMENT)
+        .update({
+          status: OrderStatus.CANCELLED,
+          cancelled_at: trx.fn.now(),
+        });
+
+    return updatedCount;
   }
 }

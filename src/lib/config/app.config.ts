@@ -146,6 +146,11 @@ export default () => {
         process.env.ASSIGNMENT_RADIUS_METERS || '5000',
         10,
       ),
+      // K candidates pulled per GEOSEARCH; we sort by (active_orders, distance).
+      assignmentCandidateK: parseInt(
+        process.env.ASSIGNMENT_CANDIDATE_K || '5',
+        10,
+      ),
       agentAcceptTimeoutSec: parseInt(
         process.env.AGENT_ACCEPT_TIMEOUT_SEC || '30',
         10,
@@ -154,7 +159,13 @@ export default () => {
         process.env.MAX_REASSIGNMENT_ATTEMPTS || '3',
         10,
       ),
-      presenceStaleSec: parseInt(process.env.PRESENCE_STALE_SEC || '90', 10),
+      // Strict 5-minute cutoff per agreed design — agents whose last_seen_at is
+      // older than this are dropped from the candidate pool and lazily evicted
+      // from Redis (`presence:geo`, `presence:meta`).
+      presenceStaleSec: parseInt(process.env.PRESENCE_STALE_SEC || '300', 10),
+      // Share of branch.deliveryFee paid to the agent on `delivered`.
+      // Float 0..1. Default 1.0 today; tuned when commission lands in Phase 4.
+      agentShareRate: parseFloat(process.env.AGENT_SHARE_RATE || '1'),
     },
 
     ws: {

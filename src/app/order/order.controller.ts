@@ -56,12 +56,12 @@ export class OrderController {
       @Body() body: CreateOrderRequestDTO,
       @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<OrderResponseDTO> {
-    const { order, items } = await this.orderService.placeOrder(
+    const { order, items, paymentSession } = await this.orderService.placeOrder(
         req.user!,
         body,
         idempotencyKey,
     );
-    return OrderResponseDTO.from(order, items);
+    return OrderResponseDTO.from(order, items, paymentSession);
   }
 
   // ─── GET /orders/:publicId ────────────────────────────────────────────────

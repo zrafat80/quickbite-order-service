@@ -21,10 +21,15 @@ interface TransitionRule {
 }
 
 const RULES: TransitionRule[] = [
-  // Customer / system can move pending_payment off after capture/cancel — handled outside the table.
+  // pending_payment is moved off by:
+  //   - the webhook capture path -> placed (handled in OrderService.markPaymentCaptured)
+  //   - the sweeper / auto-refund path -> cancelled (system actor)
+  { from: OrderStatus.PENDING_PAYMENT, to: OrderStatus.CANCELLED, actors: ['system_admin', 'system'], timestampColumn: 'cancelled_at' },
+
   { from: OrderStatus.PLACED, to: OrderStatus.ACCEPTED, actors: ['restaurant', 'system_admin'], permission: 'orders:accept', timestampColumn: 'accepted_at' },
   { from: OrderStatus.PLACED, to: OrderStatus.REJECTED, actors: ['restaurant', 'system_admin'], permission: 'orders:cancel', timestampColumn: 'rejected_at' },
-  { from: OrderStatus.PLACED, to: OrderStatus.CANCELLED, actors: ['customer', 'system_admin'], timestampColumn: 'cancelled_at' },
+  // 'system' added so the post-capture stock-failure path can cancel a just-placed order.
+  { from: OrderStatus.PLACED, to: OrderStatus.CANCELLED, actors: ['customer', 'system_admin', 'system'], timestampColumn: 'cancelled_at' },
 
   { from: OrderStatus.ACCEPTED, to: OrderStatus.PREPARING, actors: ['restaurant', 'system_admin'], permission: 'orders:update', timestampColumn: null },
   { from: OrderStatus.ACCEPTED, to: OrderStatus.CANCELLED, actors: ['restaurant', 'system_admin'], permission: 'orders:cancel', timestampColumn: 'cancelled_at' },

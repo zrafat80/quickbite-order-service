@@ -54,7 +54,10 @@ export async function up(knex: Knex): Promise<void> {
       commission      INT NOT NULL DEFAULT 0,
       currency        TEXT NOT NULL,
       payment_method  TEXT NOT NULL CHECK (payment_method IN ('online','cod')),
+      -- delivery (no separate `deliveries` table; per-order state lives here)
       delivery_agent_id BIGINT,
+      assignment_attempts INT NOT NULL DEFAULT 0,
+      last_assignment_at  TIMESTAMP(3) NULL,
       -- TIMESTAMP(3) (millisecond precision) is intentional. node-postgres
       -- returns timestamps as JS Date which only carries ms; with default
       -- microsecond precision the round-trip drops digits and breaks the
