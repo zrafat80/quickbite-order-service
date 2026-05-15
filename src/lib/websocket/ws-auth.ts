@@ -41,7 +41,10 @@ export function authenticateHandshake(
 
 /** Channels (socket.io rooms) the user is allowed to join. */
 export function permittedChannels(user: WsJwtPayload): Set<string> {
-  const allowed = new Set<string>([`customer:${user.userId}`]);
+  const allowed = new Set<string>();
+  if (user.role === 'customer') {
+    allowed.add(`customer:${user.userId}`);
+  }
   if (user.role === 'restaurant_user' && user.restaurantId) {
     allowed.add(`restaurant:${user.restaurantId}`);
     for (const b of user.branchIds ?? []) allowed.add(`branch:${b}`);

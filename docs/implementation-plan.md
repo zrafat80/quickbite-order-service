@@ -441,7 +441,21 @@ Services inject `WsPublisher` (exported by `WsModule`) and call `wsPublisher.emi
 
 ---
 
-## Phase 6 — Cold archival worker (the only background worker)
+## Phase 6 — Background Workers (Archival & Assignment Sweeper)
+
+### 6.1 Assignment Timeout Sweeper Worker
+
+**Goal:** Ensure orders do not get stuck in the `ASSIGNED` state if an agent's phone turns off or they lose connection and fail to accept/pick up the order.
+
+1. `lib/jobs/assignment-sweeper.worker.ts` — `@Injectable()` worker scheduled every 1-2 minutes via `@Cron`.
+2. Logic:
+   - Finds all orders currently in `ASSIGNED` status across all regions.
+   - For each order, retrieves the assigned agent's `last_seen_at` from Redis (via `PresenceService`).
+   - If the agent is offline or `last_seen_at` is older than 5 minutes (stale), it automatically calls `AssignmentService.reassign(region, orderId, orderCreatedAt)`.
+   - Leaves a log indicating that the order was automatically reassigned due to agent staleness.
+3. Registered in `lib/jobs/jobs.module.ts`.
+
+### 6.2 Cold archival worker
 
 ### Goal
 
@@ -491,7 +505,7 @@ Phase 3  Deliveries + Agents (compressed)      ───►  auto-assignment + a
                                                     (commission + balance deferred to Phase 4)
 Phase 4  Restaurant finance                    ───►  full money flow + owner/admin financial views
 Phase 5  WebSocket event wiring                ───►  real-time everywhere
-Phase 6  Cold archival worker                  ───►  hot DB stays small
+Phase 6  Background workers                    ───►  hot DB stays small & stuck orders are auto-reassigned
 ```
 
 Each phase is shippable. No phase mixes modules. No phase is started until the previous phase's acceptance is checked AND the matching **"Core-service changes required"** for that phase (listed inline above) are in place.

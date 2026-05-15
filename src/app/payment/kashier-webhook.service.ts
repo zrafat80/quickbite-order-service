@@ -26,6 +26,8 @@ import {
   KashierWebhookEnvelope,
 } from '../../pkg/payments/kashier/kashier.types';
 import { PaymentSessionEntity } from './entity/payment-session.entity';
+import { WsPublisher } from '../../lib/websocket/ws.publisher';
+import { OrderResponseDTO, OrderStatusResponseDTO } from '../order/dto/order.response.dto';
 
 @Injectable()
 export class KashierWebhookService {
@@ -40,6 +42,7 @@ export class KashierWebhookService {
     private readonly txRepo: TransactionRepository,
     private readonly webhookRepo: PaymentWebhookEventRepository,
     private readonly paymentService: PaymentService,
+    private readonly wsPublisher: WsPublisher,
   ) {}
 
   /**
@@ -333,7 +336,28 @@ export class KashierWebhookService {
         trx,
       );
     }
-    await this.orderService.markPaymentCaptured(region, order, trx);
+    const updatedOrder = await this.orderService.markPaymentCaptured(region, order, trx);
+
+    // Emit WS events
+    this.wsPublisher.emit(
+      `customer:${order.customerId}`,
+      'order.status_changed',
+      OrderStatusResponseDTO.from(updatedOrder)
+    );
+    
+    // For online payments, order.created is emitted to the branch only after capture
+    // (We need items for OrderResponseDTO, so let's fetch them)
+    const { items } = await this.orderService.getOrder(
+      { role: 'system_admin' } as any,
+      region,
+      order.publicId
+    );
+    
+    this.wsPublisher.emit(
+      `branch:${order.branchId}`,
+      'order.created',
+      OrderResponseDTO.from(updatedOrder, items)
+    );
   }
 
   private async handleFailure(
@@ -378,6 +402,13 @@ export class KashierWebhookService {
       );
     }
     await this.orderService.markPaymentFailed(region, order, trx);
+
+    // Emit WS event
+    this.wsPublisher.emit(
+      `customer:${order.customerId}`,
+      'payment.failed',
+      { orderId: order.publicId }
+    );
   }
 
   private async handleRefund(

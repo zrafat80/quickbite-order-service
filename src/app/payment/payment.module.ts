@@ -29,6 +29,6 @@ import { PaymentSessionSweeperWorker } from './jobs/payment-session-sweeper.work
     PaymentWebhookEventRepository,
     PaymentSessionSweeperWorker,
   ],
-  exports: [PaymentService],
+  exports: [PaymentService, TransactionRepository],
 })
 export class PaymentModule {}

@@ -101,10 +101,10 @@ export class PresenceService {
 
   // ─── POST /agents/presence/ping ───────────────────────────────────────────
   async ping(
-    region: string,
-    agentId: number,
-    lat: number,
-    lng: number,
+      region: string,
+      agentId: number,
+      lat: number,
+      lng: number,
   ): Promise<AgentPresenceEntity> {
     const entity = await this.presenceRepo.updatePing(region, agentId, lat, lng);
     if (!entity) {
@@ -114,16 +114,22 @@ export class PresenceService {
     // Write-through Redis
     const pipeline = this.redis.pipeline();
     pipeline.geoadd(presenceKeys.geo(region), lng, lat, String(agentId));
+
+    // 🔥 THE FIX: Make ping self-healing!
     pipeline.hmset(presenceKeys.meta(region, agentId), {
       last_seen_at: String(Date.now()),
+      is_online: '1', // Ensure they stay online even if Redis forgot them
     });
+
+    // We don't overwrite active_orders here because ping shouldn't reset their order count!
+
     await pipeline.exec();
 
     return entity;
   }
-
   // ─── Redis helpers used by AssignmentService ──────────────────────────────
 
+  /**
   /**
    * GEOSEARCH for nearby online agents. Returns up to `k` candidates sorted
    * by distance ASC.

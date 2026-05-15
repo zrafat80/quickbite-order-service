@@ -34,6 +34,8 @@ import {
 import { AuthenticatedUser } from './order.service.types';
 import { PaymentService } from '../payment/payment.service';
 import { PaymentSessionEntity } from '../payment/entity/payment-session.entity';
+import { WsPublisher } from '../../lib/websocket/ws.publisher';
+import { OrderResponseDTO, OrderStatusResponseDTO } from './dto/order.response.dto';
 
 @Injectable()
 export class OrderService {
@@ -49,6 +51,7 @@ export class OrderService {
     private readonly permissionCache: PermissionCacheService,
     @Inject(forwardRef(() => PaymentService))
     private readonly paymentService: PaymentService,
+    private readonly wsPublisher: WsPublisher,
   ) {}
 
   // ─── POST /orders ─────────────────────────────────────────────────────────
@@ -213,6 +216,13 @@ export class OrderService {
         );
         throw err;
       }
+      
+      // Emit WS event for COD orders
+      this.wsPublisher.emit(
+        `branch:${order.branchId}`,
+        'order.created',
+        OrderResponseDTO.from(order, items)
+      );
     }
 
     // 7. Auto-init Kashier session for online orders so the response carries
@@ -356,6 +366,18 @@ export class OrderService {
       throw err;
     }
 
+    // Emit WS events
+    this.wsPublisher.emit(
+      `customer:${updated.customerId}`,
+      'order.status_changed',
+      OrderStatusResponseDTO.from(updated)
+    );
+    this.wsPublisher.emit(
+      `branch:${updated.branchId}`,
+      'order.status_changed',
+      OrderStatusResponseDTO.from(updated)
+    );
+
     // Release reserved stock OUT-OF-TRX when an order that *had* stock reserved
     // is cancelled/rejected before the kitchen committed to it. PLACED is the
     // post-reservation state for both flows:
@@ -421,6 +443,18 @@ export class OrderService {
       await trx.rollback();
       throw err;
     }
+
+    // Emit WS events for delivery status
+    this.wsPublisher.emit(
+      `customer:${updated.customerId}`,
+      'delivery.status_changed',
+      OrderStatusResponseDTO.from(updated)
+    );
+    this.wsPublisher.emit(
+      `branch:${updated.branchId}`,
+      'delivery.status_changed',
+      OrderStatusResponseDTO.from(updated)
+    );
 
     // Post-commit Redis cleanup on delivered
     if (

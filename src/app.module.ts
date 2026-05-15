@@ -35,6 +35,8 @@ import { OrderModule } from './app/order/order.module';
 import { PaymentModule } from './app/payment/payment.module';
 import { PresenceModule } from './app/presence/presence.module';
 import { AgentModule } from './app/agent/agent.module';
+import { RestaurantFinanceModule } from './app/restaurant-finance/restaurant-finance.module';
+import { JobsModule } from './lib/jobs/jobs.module';
 
 @Module({
   imports: [
@@ -77,6 +79,8 @@ import { AgentModule } from './app/agent/agent.module';
     PaymentModule,
     PresenceModule,
     AgentModule,
+    RestaurantFinanceModule,
+    JobsModule,
   ],
   controllers: [],
   providers: [

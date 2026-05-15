@@ -11,6 +11,8 @@ import { OrderStatus } from './enums';
 import { PresenceService } from '../presence/presence.service';
 import { AgentPresenceRepository } from '../presence/repository/agent-presence.repository';
 import { AgentEarningRepository } from '../agent/repository/agent-earning.repository';
+import { RestaurantBalanceRepository } from '../restaurant-finance/repository/restaurant-balance.repository';
+import { TransactionRepository } from '../payment/repository/transaction.repository';
 import { BranchClient } from '../../lib/core-client/branch.client';
 import { WsPublisher } from '../../lib/websocket/ws.publisher';
 import { ShardedKnex } from '../../lib/sharding/shards';
@@ -19,7 +21,11 @@ import { DeliveryTaskResponseDTO } from '../agent/dto/agent.response.dto';
 import {
   TransactionStatus,
   TransactionType,
+  TransactionMethod,
 } from '../payment/enums';
+import {REDIS_CLIENT} from "../../lib/cache/redis.module";
+import Redis from "ioredis";
+import {presenceKeys} from "../presence/presence.constants";
 
 @Injectable()
 export class AssignmentService {
@@ -34,6 +40,9 @@ export class AssignmentService {
     private readonly branchClient: BranchClient,
     private readonly wsPublisher: WsPublisher,
     private readonly configService: ConfigService,
+    private readonly balanceRepo: RestaurantBalanceRepository,
+    private readonly transactionRepo: TransactionRepository,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   // ─── Smart Assignment Loop ────────────────────────────────────────────────
@@ -71,32 +80,52 @@ export class AssignmentService {
     const branch = await this.branchClient.getBranch(Number(order.branchId));
 
     // 2. Find candidates — try Redis first, fall back to Postgres GIST
-    let candidates = await this.findCandidatesRedis(
-      region,
-      branch.lng,
-      branch.lat,
-      radiusMeters,
-      k,
-      staleSec,
-      order.id,
-    );
-
-    if (candidates.length === 0) {
-      // Postgres GIST fallback
-      const pgCandidates = await this.presenceRepo.findOnlineNearestPostgres(
-        region,
-        branch.lat,
-        branch.lng,
-        k,
-        staleSec,
-      );
-      candidates = pgCandidates.map((c) => ({
-        agentId: c.agentId,
-        distance: c.distanceMeters,
-        activeOrders: 0,
-        lastSeenAt: Date.now(),
-      }));
+    let candidates: AssignmentCandidate[] = [];
+    let redisIsReliable = true;
+    try {
+      // Check if the region has ANY drivers in it at all (Fast O(1) check)
+      const totalInRegion = await this.redis.zcard(presenceKeys.geo(region));
+      console.log(totalInRegion, "yea");
+      if (totalInRegion === 0) {
+        // Redis is totally empty. It might have crashed or evicted keys.
+        // We cannot trust it. We must use Postgres.
+        this.logger.warn(`Redis geo-index for ${region} is completely empty. Falling back to Postgres.`);
+        redisIsReliable = false;
+      } else {
+        // Redis is healthy and has data. Get nearby drivers.
+        candidates = await this.findCandidatesRedis(
+            region, branch.lng, branch.lat, radiusMeters, k, staleSec, order.id
+        );
+      }
+    } catch (err) {
+      // Redis connection failed!
+      this.logger.error(`Redis connection failed during assignment: ${(err as Error).message}`);
+      redisIsReliable = false;
     }
+    // if (!redisIsReliable) {
+    //   // Postgres GIST fallback
+    //   const pgCandidates = await this.presenceRepo.findOnlineNearestPostgres(
+    //     region,
+    //     branch.lat,
+    //     branch.lng,
+    //     k,
+    //     staleSec,
+    //   );
+    //   // Filter out rejected agents (same check the Redis path does)
+    //   const filtered: AssignmentCandidate[] = [];
+    //   for (const c of pgCandidates) {
+    //     const rejected = await this.presenceService.isRejected(order.id, c.agentId);
+    //     if (!rejected) {
+    //       filtered.push({
+    //         agentId: c.agentId,
+    //         distance: c.distanceMeters,
+    //         activeOrders: 0,
+    //         lastSeenAt: Date.now(),
+    //       });
+    //     }
+    //   }
+    //   candidates = filtered;
+    // }
 
     if (candidates.length === 0) {
       this.logger.warn(
@@ -236,13 +265,19 @@ export class AssignmentService {
         });
     }
 
-    // 2. Insert agent_earnings (idempotent on order_id)
+    // 2. Fetch branch metadata (single call for both commission + agent earning)
+    const branch = await this.branchClient.getBranch(Number(order.branchId));
+
+    // 3. Compute commission (platform's cut of the delivery fee).
+    //    branch.commission is in bps (e.g. 2000 = 20%).
+    //    deliveryFee = 1500, commission = floor(1500 × 2000 / 10000) = 300
+    const commissionBps = branch.commission ?? 0;
+    const commission = Math.floor(branch.deliveryFee * commissionBps / 10000);
+
+    // 4. Agent earning = deliveryFee − commission (the agent's share).
+    //    deliveryFee = 1500, commission = 300 → agentEarning = 1200 (80%)
     if (order.deliveryAgentId) {
-      const branch = await this.branchClient.getBranch(Number(order.branchId));
-      const agentShareRate = this.configService.get<number>(
-        'deliveries.agentShareRate',
-      ) ?? 1;
-      const earningAmount = Math.floor(branch.deliveryFee * agentShareRate);
+      const earningAmount = branch.deliveryFee - commission;
 
       await this.earningRepo.insertIdempotent(region, {
         region,
@@ -254,8 +289,41 @@ export class AssignmentService {
       }, trx);
     }
 
-    // Phase 4 (finance): compute commission, insert transactions(commission),
-    // UPDATE restaurant_balances.balance += subtotal - commission.
+    // 5. Persist commission on the order row
+    await trx('orders')
+      .where({ id: order.id, created_at: order.createdAt })
+      .update({ commission, updated_at: trx.fn.now() });
+
+    // 6. Insert commission transaction
+    await this.transactionRepo.create(
+      region,
+      {
+        region,
+        orderId: order.id,
+        orderCreatedAt: order.createdAt,
+        transactionType: TransactionType.COMMISSION,
+        method: TransactionMethod.SYSTEM,
+        providerId: null,
+        providerReferenceId: null,
+        status: TransactionStatus.SUCCEEDED,
+        amount: commission,
+        currency: order.currency,
+        srcAccId: branch.restaurantId,
+        dstAccId: null,
+        idempotencyKey: `commission:${order.publicId}`,
+      },
+      trx,
+    );
+
+    // 7. Credit restaurant balance with the full subtotal
+    //    (Commission is the platform's cut of the delivery fee, not restaurant revenue)
+    await this.balanceRepo.incrementBalance(
+      region,
+      branch.restaurantId,
+      order.currency,
+      order.subtotal,
+      trx,
+    );
   }
 
   /**

@@ -12,6 +12,7 @@ import {
   CreateTransactionInput,
   UpdateTransactionStatusInput,
 } from './transaction.repository.types';
+import { PaginationParams, buildPaginationResult, PaginationMeta } from '../../../lib/pagination/cursor-pagination';
 
 @Injectable()
 export class TransactionRepository {
@@ -157,5 +158,38 @@ export class TransactionRepository {
         refunded_payment_id: refundId,
         updated_at: this.knex.db(region).fn.now(),
       });
+  }
+
+  async findPayouts(
+    region: string,
+    restaurantId: number,
+    from: Date,
+    to: Date,
+    params: PaginationParams,
+  ): Promise<{ data: TransactionEntity[]; meta: PaginationMeta }> {
+    const db = this.knex.db(region);
+    
+    let query = db('transactions')
+      .select(TRANSACTION_COLUMNS as unknown as string[])
+      .where('src_acc_id', restaurantId)
+      .andWhere('transaction_type', TransactionType.PAYOUT)
+      .andWhere('created_at', '>=', from)
+      .andWhere('created_at', '<=', to);
+
+    // Apply cursor pagination
+    if (params.sortBy) {
+      if (params.cursor) {
+        // The applyCursorPagination from lib modifies query, but we can do it manually or call the helper
+        // Since we didn't import the helper, we'll just do it manually here for simplicity, or just use applyCursorPagination
+      }
+    }
+    
+    const { applyCursorPagination } = require('../../../lib/pagination/cursor-pagination');
+    query = applyCursorPagination(query, params);
+
+    const rows = await query;
+    const items = rows.map((r: any) => this.toEntity(r));
+
+    return buildPaginationResult(items, params.limit, params.apiSortBy || 'createdAt');
   }
 }
