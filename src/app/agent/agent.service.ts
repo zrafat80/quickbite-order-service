@@ -14,6 +14,8 @@ import {
   buildPaginationResult,
   PaginationMeta,
 } from '../../lib/pagination/cursor-pagination';
+import { BranchClient } from '../../lib/core-client/branch.client';
+import { CoreBranchMetadata } from '../../lib/core-client/branch.client.types';
 
 @Injectable()
 export class AgentService {
@@ -22,6 +24,7 @@ export class AgentService {
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly earningRepo: AgentEarningRepository,
+    private readonly branchClient: BranchClient,
   ) {}
 
   // ─── GET /agents/tasks?status= ────────────────────────────────────────────
@@ -29,14 +32,26 @@ export class AgentService {
     region: string,
     agentId: number,
     options: ListTasksOptions,
-  ): Promise<{ data: OrderEntity[]; meta: PaginationMeta }> {
+  ): Promise<{ data: Array<OrderEntity & { branch?: CoreBranchMetadata }>; meta: PaginationMeta }> {
     const orders = await this.orderRepo.findByAgent(
       region,
       agentId,
       options.status,
       options.params,
     );
-    return buildPaginationResult(orders, options.params.limit, options.params.apiSortBy);
+
+    const branchIds = [...new Set(orders.map((o) => Number(o.branchId)))];
+    const branches = await this.branchClient.getBranchesBulk(branchIds);
+    const branchMap = new Map(branches.map((b) => [b.id, b]));
+
+    const augmentedOrders = orders.map((order) => {
+      return {
+        ...order,
+        branch: branchMap.get(Number(order.branchId)),
+      };
+    });
+
+    return buildPaginationResult(augmentedOrders, options.params.limit, options.params.apiSortBy);
   }
 
   // ─── GET /agents/earnings?from=&to= ──────────────────────────────────────

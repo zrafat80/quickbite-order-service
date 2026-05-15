@@ -1,5 +1,6 @@
 import { OrderEntity } from '../../order/entity/order.entity';
 import { AgentEarningEntity } from '../entity/agent-earning.entity';
+import { CoreBranchMetadata } from '../../../lib/core-client/branch.client.types';
 
 export class DeliveryTaskResponseDTO {
   orderId!: string; // public_id
@@ -16,7 +17,14 @@ export class DeliveryTaskResponseDTO {
   assignedAt!: string | null;
   pickedAt!: string | null;
 
-  static from(order: OrderEntity): DeliveryTaskResponseDTO {
+  pickup?: {
+    branchName: string;
+    lat: number;
+    lng: number;
+    addressText: string;
+  };
+
+  static from(order: OrderEntity & { branch?: CoreBranchMetadata }): DeliveryTaskResponseDTO {
     const dto = new DeliveryTaskResponseDTO();
     dto.orderId = order.publicId;
     dto.status = order.status;
@@ -31,6 +39,16 @@ export class DeliveryTaskResponseDTO {
     dto.currency = order.currency;
     dto.assignedAt = order.assignedAt ? new Date(order.assignedAt).toISOString() : null;
     dto.pickedAt = order.pickedAt ? new Date(order.pickedAt).toISOString() : null;
+
+    if (order.branch) {
+      dto.pickup = {
+        branchName: order.branch.restaurantName + ' - ' + order.branch.label,
+        lat: Number(order.branch.lat),
+        lng: Number(order.branch.lng),
+        addressText: order.branch.addressText,
+      };
+    }
+
     return dto;
   }
 }

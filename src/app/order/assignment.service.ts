@@ -85,7 +85,7 @@ export class AssignmentService {
     try {
       // Check if the region has ANY drivers in it at all (Fast O(1) check)
       const totalInRegion = await this.redis.zcard(presenceKeys.geo(region));
-      console.log(totalInRegion, "yea");
+      // console.log(totalInRegion, "yea");
       if (totalInRegion === 0) {
         // Redis is totally empty. It might have crashed or evicted keys.
         // We cannot trust it. We must use Postgres.

@@ -45,6 +45,37 @@ export class BranchClient {
     return res.data;
   }
 
+  async getBranchesBulk(branchIds: number[]): Promise<CoreBranchMetadata[]> {
+    if (branchIds.length === 0) return [];
+
+    const cachedById = new Map<number, CoreBranchMetadata>();
+    await Promise.all(
+      branchIds.map(async (id) => {
+        const raw = await this.safeGet(cacheKeys.branch(id));
+        if (raw) cachedById.set(id, JSON.parse(raw) as CoreBranchMetadata);
+      }),
+    );
+
+    const missingIds = branchIds.filter((id) => !cachedById.has(id));
+    if (missingIds.length > 0) {
+      const res = await this.http.request<{ data: CoreBranchMetadata[] }>({
+        method: 'GET',
+        path: `/api/internal/branches`,
+        query: { ids: missingIds.join(',') },
+      });
+      for (const b of res.data ?? []) {
+        cachedById.set(b.id, b);
+        await this.safeSet(
+          cacheKeys.branch(b.id),
+          JSON.stringify(b),
+          CACHE_TTL_SECONDS.BRANCH,
+        );
+      }
+    }
+
+    return branchIds.map((id) => cachedById.get(id)).filter(Boolean) as CoreBranchMetadata[];
+  }
+
   async getBranchProducts(
     branchId: number,
     productIds: number[],
