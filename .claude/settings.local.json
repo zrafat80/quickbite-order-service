@@ -92,7 +92,8 @@
       "Bash(PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d order_service_eg -c \"SELECT column_name FROM information_schema.columns WHERE table_name='transactions' AND column_name='provider_order_id';\")",
       "Bash(tee play/logs/refund-live-2.log)",
       "Bash(findstr /R \"^.env\")",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(REGION=eg CLUSTER=archive npm run migrate)"
     ]
   }
 }
