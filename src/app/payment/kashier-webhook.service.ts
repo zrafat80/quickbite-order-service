@@ -347,7 +347,7 @@ export class KashierWebhookService {
     
     // For online payments, order.created is emitted to the branch only after capture
     // (We need items for OrderResponseDTO, so let's fetch them)
-    const { items } = await this.orderService.getOrder(
+    const { order: augmentedOrder, items } = await this.orderService.getOrder(
       { role: 'system_admin' } as any,
       region,
       order.publicId
@@ -356,7 +356,7 @@ export class KashierWebhookService {
     this.wsPublisher.emit(
       `branch:${order.branchId}`,
       'order.created',
-      OrderResponseDTO.from(updatedOrder, items)
+      OrderResponseDTO.from(augmentedOrder as any, items)
     );
   }
 

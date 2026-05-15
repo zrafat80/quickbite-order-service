@@ -187,6 +187,16 @@ export class OrderService {
       throw err;
     }
 
+    const orderWithBranch = {
+      ...order,
+      branch: {
+        name: branch.restaurantName + ' - ' + branch.label,
+        addressText: branch.addressText,
+        lat: branch.lat,
+        lng: branch.lng,
+      },
+    };
+
     // 6. Reserve stock OUT-OF-TRX (per docs/business-logic/orders.md §2 step 6).
     // Online orders defer reservation until payment captures (Phase 2).
     if (body.paymentMethod === PaymentMethod.COD) {
@@ -221,7 +231,7 @@ export class OrderService {
       this.wsPublisher.emit(
         `branch:${order.branchId}`,
         'order.created',
-        OrderResponseDTO.from(order, items)
+        OrderResponseDTO.from(orderWithBranch as any, items)
       );
     }
 
@@ -245,7 +255,7 @@ export class OrderService {
       }
     }
 
-    return { order, items, paymentSession };
+    return { order: orderWithBranch as any, items, paymentSession };
   }
 
   // ─── GET /orders/{publicId} ───────────────────────────────────────────────
@@ -263,7 +273,19 @@ export class OrderService {
     const items = await this.orderItemRepo.findByOrderIds(region, [
       { orderId: order.id, orderCreatedAt: order.createdAt },
     ]);
-    return { order, items };
+
+    const branch = await this.branchClient.getBranch(order.branchId).catch(() => null);
+    const orderWithBranch = {
+      ...order,
+      branch: branch ? {
+        name: branch.restaurantName + ' - ' + branch.label,
+        addressText: branch.addressText,
+        lat: branch.lat,
+        lng: branch.lng,
+      } : undefined,
+    };
+
+    return { order: orderWithBranch as any, items };
   }
 
   // ─── GET /customer/orders ────────────────────────────────────────────────
@@ -281,7 +303,18 @@ export class OrderService {
       params: options.params,
     });
     const itemsByOrderId = await this.fetchItemsForOrders(region, orders);
-    return { orders, itemsByOrderId };
+
+    // Bulk fetch branch names
+    const branchIds = [...new Set(orders.map(o => Number(o.branchId)))];
+    const branches = await this.branchClient.getBranchesBulk(branchIds);
+    const branchMap = new Map(branches.map(b => [b.id, b.restaurantName + ' - ' + b.label]));
+
+    const ordersWithBranch = orders.map(o => ({
+      ...o,
+      branchName: branchMap.get(Number(o.branchId))
+    }));
+
+    return { orders: ordersWithBranch as any, itemsByOrderId };
   }
 
   // ─── GET /restaurant/orders ──────────────────────────────────────────────
@@ -300,7 +333,18 @@ export class OrderService {
       params: options.params,
     });
     const itemsByOrderId = await this.fetchItemsForOrders(region, orders);
-    return { orders, itemsByOrderId };
+
+    // Bulk fetch branch names
+    const branchIds = [...new Set(orders.map(o => Number(o.branchId)))];
+    const branches = await this.branchClient.getBranchesBulk(branchIds);
+    const branchMap = new Map(branches.map(b => [b.id, b.restaurantName + ' - ' + b.label]));
+
+    const ordersWithBranch = orders.map(o => ({
+      ...o,
+      branchName: branchMap.get(Number(o.branchId))
+    }));
+
+    return { orders: ordersWithBranch as any, itemsByOrderId };
   }
 
   // ─── PATCH /orders/{publicId}/status ─────────────────────────────────────
@@ -367,15 +411,21 @@ export class OrderService {
     }
 
     // Emit WS events
+    const branch = await this.branchClient.getBranch(updated.branchId).catch(() => null);
+    const updatedWithBranch = {
+      ...updated,
+      branchName: branch ? branch.restaurantName + ' - ' + branch.label : undefined
+    };
+
     this.wsPublisher.emit(
       `customer:${updated.customerId}`,
       'order.status_changed',
-      OrderStatusResponseDTO.from(updated)
+      OrderStatusResponseDTO.from(updatedWithBranch as any)
     );
     this.wsPublisher.emit(
       `branch:${updated.branchId}`,
       'order.status_changed',
-      OrderStatusResponseDTO.from(updated)
+      OrderStatusResponseDTO.from(updatedWithBranch as any)
     );
 
     // Release reserved stock OUT-OF-TRX when an order that *had* stock reserved
@@ -445,15 +495,21 @@ export class OrderService {
     }
 
     // Emit WS events for delivery status
+    const branch = await this.branchClient.getBranch(updated.branchId).catch(() => null);
+    const updatedWithBranch = {
+      ...updated,
+      branchName: branch ? branch.restaurantName + ' - ' + branch.label : undefined
+    };
+
     this.wsPublisher.emit(
       `customer:${updated.customerId}`,
       'delivery.status_changed',
-      OrderStatusResponseDTO.from(updated)
+      OrderStatusResponseDTO.from(updatedWithBranch as any)
     );
     this.wsPublisher.emit(
       `branch:${updated.branchId}`,
       'delivery.status_changed',
-      OrderStatusResponseDTO.from(updated)
+      OrderStatusResponseDTO.from(updatedWithBranch as any)
     );
 
     // Post-commit Redis cleanup on delivered

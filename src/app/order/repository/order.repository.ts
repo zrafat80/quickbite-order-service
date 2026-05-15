@@ -305,6 +305,7 @@ export class OrderRepository {
         status: OrderStatus.READY,
         delivery_agent_id: null,
         assigned_at: null,
+        accepted_at: null,
         updated_at: trx.fn.now(),
       })
       .returning(ORDER_COLUMNS as unknown as string[]);
@@ -326,5 +327,22 @@ export class OrderRepository {
       .where({ id: orderId, created_at: orderCreatedAt })
       .first();
     return row ? this.toEntity(row) : null;
+  }
+
+  async findIgnoredAssignments(region: string, timeoutSec: number): Promise<OrderEntity[]> {
+    const rows = await this.knex.db(region)('orders')
+      .select(ORDER_COLUMNS as unknown as string[])
+      .where('status', OrderStatus.ASSIGNED)
+      .whereNull('accepted_at')
+      .whereRaw(`last_assignment_at < NOW() - (? || ' seconds')::interval`, [timeoutSec]);
+    return rows.map((r: any) => this.toEntity(r));
+  }
+
+  async findAllAssigned(region: string): Promise<OrderEntity[]> {
+    const rows = await this.knex.db(region)('orders')
+      .select(ORDER_COLUMNS as unknown as string[])
+      .where('status', OrderStatus.ASSIGNED)
+      .whereNotNull('delivery_agent_id');
+    return rows.map((r: any) => this.toEntity(r));
   }
 }

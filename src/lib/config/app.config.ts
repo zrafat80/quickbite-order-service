@@ -171,5 +171,11 @@ export default () => {
     ws: {
       heartbeatSec: parseInt(process.env.WS_HEARTBEAT_SEC || '30', 10),
     },
+
+    archival: {
+      // Hard cap on a single nightly archival run. Once exceeded the worker
+      // stops cleanly between batches and resumes the leftover the next night.
+      maxRuntimeMin: parseInt(process.env.ARCHIVAL_MAX_RUNTIME_MIN || '60', 10),
+    },
   };
 };

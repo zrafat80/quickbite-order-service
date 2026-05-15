@@ -102,30 +102,30 @@ export class AssignmentService {
       this.logger.error(`Redis connection failed during assignment: ${(err as Error).message}`);
       redisIsReliable = false;
     }
-    // if (!redisIsReliable) {
-    //   // Postgres GIST fallback
-    //   const pgCandidates = await this.presenceRepo.findOnlineNearestPostgres(
-    //     region,
-    //     branch.lat,
-    //     branch.lng,
-    //     k,
-    //     staleSec,
-    //   );
-    //   // Filter out rejected agents (same check the Redis path does)
-    //   const filtered: AssignmentCandidate[] = [];
-    //   for (const c of pgCandidates) {
-    //     const rejected = await this.presenceService.isRejected(order.id, c.agentId);
-    //     if (!rejected) {
-    //       filtered.push({
-    //         agentId: c.agentId,
-    //         distance: c.distanceMeters,
-    //         activeOrders: 0,
-    //         lastSeenAt: Date.now(),
-    //       });
-    //     }
-    //   }
-    //   candidates = filtered;
-    // }
+    if (!redisIsReliable) {
+      // Postgres GIST fallback
+      const pgCandidates = await this.presenceRepo.findOnlineNearestPostgres(
+        region,
+        branch.lat,
+        branch.lng,
+        k,
+        staleSec,
+      );
+      // Filter out rejected agents (same check the Redis path does)
+      const filtered: AssignmentCandidate[] = [];
+      for (const c of pgCandidates) {
+        const rejected = await this.presenceService.isRejected(order.id, c.agentId);
+        if (!rejected) {
+          filtered.push({
+            agentId: c.agentId,
+            distance: c.distanceMeters,
+            activeOrders: 0,
+            lastSeenAt: Date.now(),
+          });
+        }
+      }
+      candidates = filtered;
+    }
 
     if (candidates.length === 0) {
       this.logger.warn(
@@ -142,13 +142,21 @@ export class AssignmentService {
 
     // 4. Try each candidate
     for (const candidate of candidates) {
+      if (candidate.activeOrders > 0) break;
       const result = await this.tryAssignToAgent(region, order, candidate.agentId);
       if (result) {
+        // Fetch branch metadata for the WS event
+        const branch = await this.branchClient.getBranch(result.branchId).catch(() => null);
+        const resultWithBranch = {
+          ...result,
+          branch: branch ?? undefined,
+        };
+
         // Success! Emit WS event
         this.wsPublisher.emit(
           `agent:${candidate.agentId}`,
           'task.assigned',
-          DeliveryTaskResponseDTO.from(result),
+          DeliveryTaskResponseDTO.from(resultWithBranch as any),
         );
         return { assigned: true, agentId: candidate.agentId };
       }
@@ -235,6 +243,51 @@ export class AssignmentService {
         'assignment.unassigned',
         { orderId },
       );
+    }
+  }
+
+  // ─── Sweeper Logic ────────────────────────────────────────────────────────
+  /**
+   * Orchestrates the maintenance of active assignments.
+   * 1. Reassigns "Ignored" orders (Online drivers who didn't respond in 60s).
+   * 2. Reassigns "Stale" orders (Drivers who went offline or lost heartbeat).
+   */
+  async performSweep(region: string): Promise<void> {
+    // A. Handle Ignored Assignments (Drivers who are silent for > 60s)
+    const ignored = await this.orderRepo.findIgnoredAssignments(region, 60);
+    if (ignored.length > 0) {
+      this.logger.warn(`Sweep: Found ${ignored.length} ignored assignments in ${region}. Reassigning...`);
+      for (const order of ignored) {
+        if (!order.deliveryAgentId) continue;
+        await this.handleAgentReject(region, order.id, order.createdAt, order.deliveryAgentId)
+          .catch(err => this.logger.error(`Sweep: Failed to reassign ignored order ${order.publicId}: ${err.message}`));
+      }
+    }
+
+    // B. Handle Stale/Offline Agents
+    const assigned = await this.orderRepo.findAllAssigned(region);
+    if (assigned.length === 0) return;
+
+    const agentIds = [...new Set(assigned.map(o => Number(o.deliveryAgentId)))];
+    const metaMap = await this.presenceService.getAgentsMeta(region, agentIds);
+
+    const now = Date.now();
+    const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+    const stale = assigned.filter(order => {
+      const agentId = Number(order.deliveryAgentId);
+      const presence = metaMap.get(agentId);
+      if (!presence || !presence.isOnline) return true; // Offline
+      return (now - presence.lastSeenAt) > HEARTBEAT_TIMEOUT_MS; // Missing heartbeat
+    });
+
+    if (stale.length > 0) {
+      this.logger.warn(`Sweep: Found ${stale.length} stale/offline agents in ${region}. Reassigning...`);
+      for (const order of stale) {
+        if (!order.deliveryAgentId) continue;
+        await this.handleAgentReject(region, order.id, order.createdAt, order.deliveryAgentId)
+          .catch(err => this.logger.error(`Sweep: Failed to reassign stale order ${order.publicId}: ${err.message}`));
+      }
     }
   }
 

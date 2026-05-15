@@ -112,7 +112,8 @@ export class AgentController {
     return PresenceResponseDTO.success();
   }
 
-  // ═══ Task list ════════════════════════════════════════════════════════════
+  // ═══ Task list ══
+  // ══════════════════════════════════════════════════════════
 
   @Get('agents/tasks')
   @UseGuards(JwtAuthGuard)
@@ -263,7 +264,7 @@ export class AgentController {
     region: string,
     order: any,
   ): Promise<OrderStatusResponseDTO> {
-    if (order.status !== OrderStatus.ASSIGNED) {
+    if (order.status !== OrderStatus.ASSIGNED || order.accepted_at === null) {
       throw new ConflictException(`Order must be in assigned state to pickup, currently ${order.status}`);
     }
     const updated = await this.orderService.updateStatusInternal(

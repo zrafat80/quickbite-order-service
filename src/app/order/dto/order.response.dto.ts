@@ -30,6 +30,12 @@ export class OrderResponseDTO {
   branchId!: number;
   restaurantId!: number;
   customerId!: number;
+  branch?: {
+    name: string;
+    addressText: string;
+    lat: number;
+    lng: number;
+  };
   delivery!: {
     addressText: string;
     lat: number;
@@ -60,7 +66,7 @@ export class OrderResponseDTO {
   cancelledAt!: string | null;
 
   static from(
-    order: OrderEntity,
+    order: OrderEntity & { branch?: { name: string; addressText: string; lat: number; lng: number } },
     items: OrderItemEntity[],
     paymentSession?: PaymentSessionEntity,
   ): OrderResponseDTO {
@@ -102,6 +108,14 @@ export class OrderResponseDTO {
     dto.pickedAt = toIsoOrNull(order.pickedAt);
     dto.deliveredAt = toIsoOrNull(order.deliveredAt);
     dto.cancelledAt = toIsoOrNull(order.cancelledAt);
+    if (order.branch) {
+      dto.branch = {
+        name: order.branch.name,
+        addressText: order.branch.addressText,
+        lat: Number(order.branch.lat),
+        lng: Number(order.branch.lng),
+      };
+    }
     return dto;
   }
 }
@@ -113,10 +127,14 @@ export class OrderSummaryResponseDTO {
   branchId!: number;
   total!: number;
   currency!: string;
+  branchName?: string;
   itemCount!: number;
   createdAt!: string;
 
-  static from(order: OrderEntity, itemCount: number): OrderSummaryResponseDTO {
+  static from(
+    order: OrderEntity & { branchName?: string },
+    itemCount: number,
+  ): OrderSummaryResponseDTO {
     const dto = new OrderSummaryResponseDTO();
     dto.id = order.publicId;
     dto.status = order.status;
@@ -124,6 +142,7 @@ export class OrderSummaryResponseDTO {
     dto.branchId = Number(order.branchId);
     dto.total = Number(order.total);
     dto.currency = order.currency;
+    dto.branchName = order.branchName;
     dto.itemCount = itemCount;
     dto.createdAt = toIso(order.createdAt);
     return dto;
@@ -133,12 +152,14 @@ export class OrderSummaryResponseDTO {
 export class OrderStatusResponseDTO {
   id!: string;
   status!: OrderStatus;
+  branchName?: string;
   ts!: string;
 
-  static from(order: OrderEntity): OrderStatusResponseDTO {
+  static from(order: OrderEntity & { branchName?: string }): OrderStatusResponseDTO {
     const dto = new OrderStatusResponseDTO();
     dto.id = order.publicId;
     dto.status = order.status;
+    dto.branchName = order.branchName;
     dto.ts = new Date().toISOString();
     return dto;
   }

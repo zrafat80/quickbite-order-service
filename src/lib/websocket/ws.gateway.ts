@@ -70,7 +70,9 @@ export class WsGateway
       return;
     }
 
-    const allowed = permittedChannels(user);
+    const regionsStr = this.configService.get<string>('REGIONS') ?? 'eg';
+    const regions = regionsStr.split(',').map(r => r.trim());
+    const allowed = permittedChannels(user, regions);
     socket.data.user = user;
     socket.data.allowed = allowed;
 

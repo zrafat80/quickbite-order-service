@@ -40,7 +40,7 @@ export function authenticateHandshake(
 }
 
 /** Channels (socket.io rooms) the user is allowed to join. */
-export function permittedChannels(user: WsJwtPayload): Set<string> {
+export function permittedChannels(user: WsJwtPayload, regions: string[] = []): Set<string> {
   const allowed = new Set<string>();
   if (user.role === 'customer') {
     allowed.add(`customer:${user.userId}`);
@@ -51,6 +51,11 @@ export function permittedChannels(user: WsJwtPayload): Set<string> {
   }
   if (user.role === 'delivery_agent') {
     allowed.add(`agent:${user.userId}`);
+  }
+  if (user.role === 'system_admin') {
+    for (const r of regions) {
+      allowed.add(`admin:${r}:alerts`);
+    }
   }
   return allowed;
 }
