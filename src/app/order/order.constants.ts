@@ -10,6 +10,8 @@ export const ORDER_ERRORS = {
   ADDRESS_NOT_FOUND: 'Customer address not found',
   ADDRESS_NOT_OWNED: 'Customer address does not belong to the authenticated customer',
   INVALID_STATUS_TRANSITION: 'Status transition is not allowed',
+  AGENT_TRANSITION_WRONG_ENDPOINT:
+    'Delivery transitions (picked, delivered) must be performed via /agent/orders/:id/{pickup,deliver}',
   CANCEL_WINDOW_EXPIRED: 'Cancellation window has passed; contact support',
   CUSTOMERS_ONLY: 'Only customers can perform this action',
   RESTAURANTS_ONLY: 'Only restaurant users can perform this action',

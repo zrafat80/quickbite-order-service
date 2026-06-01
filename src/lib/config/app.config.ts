@@ -107,6 +107,16 @@ export default () => {
       dlx: process.env.RABBITMQ_CORE_EVENTS_DLX || 'core.events.dlx',
       dlq: process.env.RABBITMQ_CORE_EVENTS_DLQ || 'order-service.core-events.dlq',
       prefetch: parseInt(process.env.RABBITMQ_PREFETCH || '32', 10),
+      orderEventsExchange:
+        process.env.RABBITMQ_ORDER_EVENTS_EXCHANGE || 'order.events',
+    },
+
+    outbound: {
+      drainTickSec: parseInt(
+        process.env.OUTBOUND_EVENTS_DRAIN_TICK_SEC || '2',
+        10,
+      ),
+      batchSize: parseInt(process.env.OUTBOUND_EVENTS_BATCH_SIZE || '100', 10),
     },
 
     core: {
@@ -163,6 +173,10 @@ export default () => {
       // older than this are dropped from the candidate pool and lazily evicted
       // from Redis (`presence:geo`, `presence:meta`).
       presenceStaleSec: parseInt(process.env.PRESENCE_STALE_SEC || '300', 10),
+      // How long an order may sit in status='ready' without a successful
+      // assignment before the sweeper re-attempts. Also doubles as the
+      // spacing between retries (we bump last_assignment_at on each pass).
+      readyStaleSec: parseInt(process.env.READY_STALE_SEC || '60', 10),
       // Share of branch.deliveryFee paid to the agent on `delivered`.
       // Float 0..1. Default 1.0 today; tuned when commission lands in Phase 4.
       agentShareRate: parseFloat(process.env.AGENT_SHARE_RATE || '1'),

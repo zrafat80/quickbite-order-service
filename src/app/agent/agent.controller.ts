@@ -19,12 +19,12 @@ import { JwtAuthGuard } from '../../lib/middleware/guards/jwtGuard';
 import { PermissionsGuard } from '../../lib/middleware/guards/permissions.guard';
 import { RequirePermissions } from '../../lib/decorators/permissions.decorator';
 import { AgentService } from './agent.service';
-import { PresenceService } from '../presence/presence.service';
+import { PresenceService } from './presence.service';
 import { AssignmentService } from '../order/assignment.service';
 import { OrderService } from '../order/order.service';
 import { OrderRepository } from '../order/repository/order.repository';
-import { PresenceLocationRequestDTO } from '../presence/dto/presence.request.dto';
-import { PresenceResponseDTO } from '../presence/dto/presence.response.dto';
+import { PresenceLocationRequestDTO } from './dto/presence.request.dto';
+import { PresenceResponseDTO } from './dto/presence.response.dto';
 import {
   DeliveryAction,
   UpdateDeliveryStatusRequestDTO,
@@ -37,7 +37,7 @@ import {
 } from './dto/agent.response.dto';
 import { OrderStatusResponseDTO } from '../order/dto/order.response.dto';
 import { AGENT_ERRORS } from './agent.constants';
-import { PRESENCE_ERRORS } from '../presence/presence.constants';
+import { PRESENCE_ERRORS } from './presence.constants';
 import { OrderStatus } from '../order/enums';
 import {
   parsePaginationQuery,

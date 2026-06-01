@@ -17,6 +17,9 @@ export enum TransactionType {
   PAYOUT = 'payout',
   COD_COLLECTION = 'cod_collection',
   ADJUSTMENT = 'adjustment',
+  RESTAURANT_CREDIT = 'restaurant_credit',
+  AGENT_EARNING = 'agent_earning',
+  SERVICE_FEE = 'service_fee',
 }
 
 // Values must match the CHECK constraint on `transactions.method`.

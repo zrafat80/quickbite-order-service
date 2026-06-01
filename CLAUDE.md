@@ -131,6 +131,13 @@ src/
         branch-updated.handler.ts
         restaurant-suspended.handler.ts
         rbac-permissions-changed.handler.ts
+    events/                           # outbound async publisher (RabbitMQ): transactional outbox + drainer
+      events.module.ts                # @Module — wires outbox repo, broker, drain service
+      event-types.ts                  # EVENT_TYPES routing-key constants (order.placed, order.rejected, order.delivered, payment.completed)
+      events.types.ts                 # InsertOutboxInput, OutboxRow
+      outbox.repository.ts            # insertOutboxEvent(s), claimBatch (FOR UPDATE SKIP LOCKED), markDispatchedBulk, markFailed
+      order-events.broker.ts          # @Injectable publisher for `order.events` exchange (separate connection from inbound consumer)
+      outbox-drain.service.ts         # @Cron('*/2 * * * * *') — iterates regions, claims batch, publishes, bulk-marks dispatched
     messaging/                        # AMQP connection + channel lifecycle (DI-registered)
       messaging.module.ts             # @Global() so consumers/publishers can inject the broker
       amqp.connection.ts              # OnModuleInit / OnApplicationShutdown — single connection
@@ -319,6 +326,23 @@ Reasons:
 
 - Per the PRD, only the **current year**'s orders/payments are queryable from the hot DB. Older rows are moved to a **separate cold Postgres database per region** (`order_service_archive` cluster, one per region — same shard topology as the hot DB). The archival worker is implemented in this milestone — see `docs/implementation-plan.md` Phase 7.
 
+### Transactions ledger — double-entry legs
+
+- On delivery (`AssignmentService.settleDelivered`) we write **four** leg rows into `transactions` in the same trx as the `orders.status='delivered'` flip:
+  - `commission`         — platform's cut of `delivery_fee`              (`src_acc_id = restaurantId`, `dst_acc_id = null` for platform)
+  - `agent_earning`      — agent's share = `delivery_fee − commission`   (`dst_acc_id = agentId`)
+  - `restaurant_credit`  — restaurant's share = `subtotal`               (`dst_acc_id = restaurantId`)
+  - `service_fee`        — platform-collected service fee                (`dst_acc_id = null`; skipped when `order.serviceFee == 0`)
+- These four sum to the original `charge` / `cod_collection` amount (= `order.total`). That is an invariant — any reconciliation tool can join `transactions` on `order_id` and assert the sum.
+- `restaurant_balances` and `agent_earnings` are **denormalized projections** of the relevant leg rows, kept for fast reads / payout cycles.
+- Every leg row is idempotency-keyed by `<type>:<order.publicId>` so a duplicate `settleDelivered` cannot double-insert.
+
+### Refund legs / restaurant-credit endpoint (TODO)
+
+- We intentionally do **not** reverse the per-order legs on refund yet. Refunds currently write a single `refund` row mirroring the original `charge` and stop there.
+- `transactions.reason` (added with the legs migration) is reserved for refund-fault attribution — e.g. `restaurant_fault`, `customer_fault`, `system_fault`. Stamp it whenever a refund or adjustment is issued; existing refund flows will be updated to populate it.
+- When that's wired, we'll add an internal endpoint that credits the restaurant balance back (i.e. re-emits a `restaurant_credit` adjustment leg + bumps `restaurant_balances`) **only** when `reason` indicates the restaurant was not at fault. Until that endpoint exists, do not invent ad-hoc balance adjustments inline — funnel everything through this single code path so the ledger stays the source of truth.
+
 ---
 
 ## 8. Cross-cutting infra
@@ -365,6 +389,24 @@ constructor(@Inject('KNEX_CONNECTION') private readonly knex: ShardedKnex) {}
 - Read-heavy endpoints use the same primitives as core's `lib/cache/`: `@UseInterceptors(UnifiedCacheInterceptor) @CacheScope('PUBLIC' | 'PRIVATE')`. `PRIVATE` automatically scopes the cache key by `req.user.userId`.
 - Cache invalidation: explicit `cacheManager.del(key)` calls in the service after mutating writes. Do **not** rely on TTL alone for user-facing data.
 - **Per-region cache namespacing** (deviation): every key is prefixed with the region (`eg:order:123`). The cache module's key generator reads `req.region` from the resolver.
+
+#### Branch-product projection — split meta vs stock
+
+`BranchClient.getBranchProducts` does **not** cache a product as a single blob. It maintains two independent projections so that the hot, churn-prone field (stock) never busts the rest:
+
+| key                                      | shape                                                | TTL  | invalidated by |
+|------------------------------------------|------------------------------------------------------|------|----------------|
+| `core:product:meta:<branchId>:<pid>`     | `{productId, name, price, imageUrl, isAvailable}`    | 1 h  | `product.price.changed`, `product.meta.changed` |
+| `core:product:stock:<branchId>:<pid>`    | numeric stock as a string                            | 30 s | `product.stock.changed` |
+
+Read path: try both keys per productId in parallel; if either is missing, fall through to a single core call that returns both halves and write them back independently. The function still returns a unified `CoreBranchProduct[]` so callers don't notice the split.
+
+Event mapping in `lib/core-events/handlers/`:
+- `product.stock.changed` → `cache.del(productStock(...))` only — leaves meta intact.
+- `product.price.changed` → `cache.del(productMeta(...))` — price is part of meta.
+- `product.meta.changed`  → `cache.del(productMeta(...))` — admin updated name/image/availability.
+
+Core's contract: emit `product.meta.changed` whenever admin mutates `name`, `image_url`, or `is_available`. Stock and price already have their own events. If you add a new field to the meta projection here, you must coordinate with core to add it to the same event.
 
 ### Auth
 
@@ -415,9 +457,9 @@ constructor(@Inject('KNEX_CONNECTION') private readonly knex: ShardedKnex) {}
 - Path/query params: type them with the right primitive (`@Param('id', ParseIntPipe) id: number`) or, for the cursor pagination contract, use `parsePaginationQuery` and `parseFilters` from `lib/pagination/` exactly as core does.
 - **There is no per-controller `validateBody` helper** — that was the old pre-Nest pattern.
 
-### Async with `core-service` (RabbitMQ)
+### Async with `core-service` (inbound, RabbitMQ)
 
-This service does **not** emit outbound async events to anyone in this milestone. The only async path is **inbound from `core-service` over RabbitMQ** for cache invalidation and authorization invalidation.
+The inbound async path is **from `core-service` over RabbitMQ** for cache invalidation and authorization invalidation.
 
 The wiring lives in `lib/messaging/` (AMQP connection + lifecycle) and `lib/core-events/` (consumer + handlers), both wired as NestJS modules. The connection is opened in `OnModuleInit` and closed in `OnApplicationShutdown` — same lifecycle pattern as `lib/database.service.ts`.
 
@@ -434,11 +476,29 @@ The wiring lives in `lib/messaging/` (AMQP connection + lifecycle) and `lib/core
 - Delivery semantics: **at-least-once**. Manual ack after the handler commits. Duplicates are expected.
 - Dedupe via Redis SETNX on `core-events:dedupe:<eventId>` (24h TTL): set-if-absent before dispatching the handler; if not fresh, ack and skip. Safe to expire because every handler is an idempotent cache invalidation.
 - Authentication: AMQP credentials (per-service vhost user/pass from env). No HMAC on the wire — the broker is trusted.
-- There is **no** outbound `events_outbox` in this service. If a future consumer requires it, add both the table and a dispatcher then.
+
+### Async to `analytics-service` (outbound, RabbitMQ) — transactional outbox
+
+Outbound async emission to `analytics-service` is implemented in this milestone via a **transactional outbox + drainer**. Services must **never** publish to RabbitMQ directly in the request path — publishing without an outbox can lose events on crash and is not acceptable. The wiring lives in `lib/events/`.
+
+- **In-trx write (`OutboxRepository.insertOutboxEvent`)**: services append a row to `events_outbox` inside the same DB transaction as the domain write (e.g. order placement, status transition, payment completion). If the trx rolls back, the event row vanishes too — no orphan publishes.
+- **Drainer (`OutboxDrainService`)**: a NestJS `@Cron('*/2 * * * * *')` job, one tick per 2s. For each region it opens a trx, claims a batch with `SELECT ... FOR UPDATE SKIP LOCKED` (so concurrent drainer workers in the same region never double-publish), publishes each row to the `order.events` exchange via `OrderEventsBroker`, and bulk-updates `dispatched_at = NOW()`. On publish failure: the row is marked (`attempts++`, `last_error`), the batch bails out, and the next tick retries.
+- **Broker (`OrderEventsBroker`)**: a dedicated publisher with its **own RabbitMQ connection**, distinct from the inbound `core-events` consumer's connection — a publisher hiccup must not kill the consumer's channel.
+- **Schema**: `events_outbox` is **per-shard** (no `region` column — each region's DB has its own copy; the row's region is implied by the cluster it lives in). `UNIQUE (event_id)` (UUID) so analytics can dedupe. Partial index `(id) WHERE dispatched_at IS NULL` keeps the claim scan cheap. Migration: `src/database/migrations/20260520000010_create_events_outbox.ts`.
+- **Topology**:
+  - Topic exchange: `order.events` (durable, declared by this service).
+  - Analytics binds on `order.#, payment.#`.
+- **Routing keys emitted** (defined in `lib/events/event-types.ts` — keep aligned with analytics' bindings):
+  - `order.placed`
+  - `order.rejected`
+  - `order.delivered`
+  - `payment.completed`
+- **Delivery semantics**: at-least-once. Analytics must dedupe by `event_id`.
+- **New event types**: add the routing key constant in `event-types.ts`, write the outbox row in the same trx as the domain write inside the service, and notify analytics owners so they bind it. Do **not** publish from the request path; do **not** start a separate trx for the outbox insert.
 
 ### Reliability requirement on `core-service`
 
-Core must use a **transactional outbox** on its side: domain mutation and an outbox row are written in the same DB trx; a core-side dispatcher drains the outbox to RabbitMQ with publisher confirms. Publishing directly in the request path without an outbox can lose events on crash and is not acceptable.
+Core must use the same **transactional outbox** discipline on its side for the inbound `core.events` stream: domain mutation and outbox row in the same DB trx; a core-side dispatcher drains to RabbitMQ with publisher confirms. Publishing directly in the request path without an outbox can lose events on crash and is not acceptable.
 
 ### WebSocket
 
@@ -517,8 +577,7 @@ Implement one module end-to-end before starting the next. Order: **orders → pa
 
 ## 13. Out of scope (do not build)
 
-- Analytics service / analytics DB and any async event emission to it (separate service, future).
-- Outbound async events from this service to **any** consumer in this milestone — async with core-service is **inbound only** (cache invalidation).
+- The `analytics-service` itself (separate service, future) — this service emits to it via the `order.events` exchange (see §8), but the consumer side is not built here.
 - DevOps / deploy infra, observability stack, benchmark/perf testing — separate effort, future.
 - Read replicas — single primary per region for now; revisit when traffic justifies it.
 - Recommendations, loyalty, AI delivery optimization, reviews (PRD §13).

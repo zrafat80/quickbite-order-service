@@ -41,6 +41,7 @@ export class TransactionRepository {
         ? Number(row.refunded_payment_id)
         : null,
       idempotencyKey: row.idempotency_key ?? null,
+      reason: row.reason ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });
@@ -69,6 +70,7 @@ export class TransactionRepository {
         dst_acc_id: input.dstAccId,
         refunded_payment_id: input.refundedPaymentId ?? null,
         idempotency_key: input.idempotencyKey,
+        reason: input.reason ?? null,
       })
       .returning(TRANSACTION_COLUMNS as unknown as string[]);
     return this.toEntity(row);

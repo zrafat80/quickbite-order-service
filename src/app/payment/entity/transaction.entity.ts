@@ -18,6 +18,7 @@ export class TransactionEntity {
   isRefunded!: boolean;
   refundedPaymentId!: number | null;
   idempotencyKey!: string | null;
+  reason!: string | null;
   createdAt!: Date;
   updatedAt!: Date;
 

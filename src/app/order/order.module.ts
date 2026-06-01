@@ -6,14 +6,12 @@ import { OrderItemRepository } from './repository/order-item.repository';
 import { OrderStatusService } from './order-status.service';
 import { AssignmentService } from './assignment.service';
 import { PaymentModule } from '../payment/payment.module';
-import { PresenceModule } from '../presence/presence.module';
 import { AgentModule } from '../agent/agent.module';
 import { RestaurantFinanceModule } from '../restaurant-finance/restaurant-finance.module';
 
 @Module({
   imports: [
     forwardRef(() => PaymentModule),
-    forwardRef(() => PresenceModule),
     forwardRef(() => AgentModule),
     forwardRef(() => RestaurantFinanceModule),
   ],

@@ -36,6 +36,8 @@ import { PaymentService } from '../payment/payment.service';
 import { PaymentSessionEntity } from '../payment/entity/payment-session.entity';
 import { WsPublisher } from '../../lib/websocket/ws.publisher';
 import { OrderResponseDTO, OrderStatusResponseDTO } from './dto/order.response.dto';
+import { OutboxRepository } from '../../lib/events/outbox.repository';
+import { EVENT_TYPES } from '../../lib/events/event-types';
 
 @Injectable()
 export class OrderService {
@@ -52,6 +54,7 @@ export class OrderService {
     @Inject(forwardRef(() => PaymentService))
     private readonly paymentService: PaymentService,
     private readonly wsPublisher: WsPublisher,
+    private readonly outboxRepo: OutboxRepository,
   ) {}
 
   // ─── POST /orders ─────────────────────────────────────────────────────────
@@ -181,6 +184,46 @@ export class OrderService {
         }),
         trx,
       );
+
+      // Transactional outbox — drained out-of-band to RabbitMQ `order.events`.
+      //
+      // Revenue-recognition rule for analytics:
+      //   - COD orders: revenue is real the moment we place the order, so
+      //     emit order.placed here and don't emit payment.completed later.
+      //   - ONLINE orders: revenue is pending until the payment captures.
+      //     Skip order.placed here; markPaymentCaptured will emit
+      //     payment.completed which carries the same aggregate-incrementing
+      //     fields. Emitting both would double-count online revenue.
+      if (body.paymentMethod === PaymentMethod.COD) {
+        await this.outboxRepo.insertOutboxEvent(region, trx, {
+          aggregateType: 'order',
+          aggregateId: order.publicId,
+          eventType: EVENT_TYPES.ORDER_PLACED,
+          payload: {
+            orderId: order.publicId,
+            region,
+            countryCode: branch.countryCode,
+            restaurantId: Number(branch.restaurantId),
+            branchId: Number(branch.id),
+            customerId: Number(user.userId),
+            status: order.status,
+            paymentMethod: body.paymentMethod,
+            subtotal,
+            deliveryFee,
+            serviceFee,
+            total,
+            currency: branch.currency,
+            items: items.map((it) => ({
+              productId: Number(it.productId),
+              quantity: it.quantity,
+              unitPriceSnapshot: it.unitPriceSnapshot,
+              lineTotal: it.lineTotal,
+            })),
+            placedAt: new Date(order.createdAt).toISOString(),
+          },
+        });
+      }
+
       await trx.commit();
     } catch (err) {
       await trx.rollback();
@@ -356,6 +399,16 @@ export class OrderService {
   ): Promise<OrderEntity> {
     if (!region) throw new BadRequestException(ORDER_ERRORS.REGION_REQUIRED);
 
+    // Agent-owned transitions (PICKED, DELIVERED) require the dedicated
+    // /agent endpoints. Those paths run settlement, agent_earnings, and the
+    // outbox emit together; the generic status endpoint does not.
+    if (
+      nextStatus === OrderStatus.PICKED ||
+      nextStatus === OrderStatus.DELIVERED
+    ) {
+      throw new ConflictException(ORDER_ERRORS.AGENT_TRANSITION_WRONG_ENDPOINT);
+    }
+
     const current = await this.orderRepo.findByPublicId(region, publicId);
     if (!current) throw new NotFoundException(ORDER_ERRORS.NOT_FOUND);
 
@@ -404,6 +457,26 @@ export class OrderService {
         timestampColumn,
         trx,
       );
+
+      // Outbox emit on REJECTED — analytics-service consumes this to bump
+      // rejected_count on restaurant/branch/platform aggregates. Same trx
+      // as the status flip so we never publish a reject the DB rolled back.
+      if (nextStatus === OrderStatus.REJECTED) {
+        await this.outboxRepo.insertOutboxEvent(region, trx, {
+          aggregateType: 'order',
+          aggregateId: updated.publicId,
+          eventType: EVENT_TYPES.ORDER_REJECTED,
+          payload: {
+            orderId: updated.publicId,
+            region,
+            restaurantId: Number(updated.restaurantId),
+            branchId: Number(updated.branchId),
+            currency: updated.currency,
+            rejectedAt: new Date(updated.rejectedAt ?? new Date()).toISOString(),
+          },
+        });
+      }
+
       await trx.commit();
     } catch (err) {
       await trx.rollback();
@@ -486,6 +559,26 @@ export class OrderService {
       // Settlement on delivered: COD flip + agent_earnings insert
       if (nextStatus === OrderStatus.DELIVERED && this._assignmentService) {
         await this._assignmentService.settleDelivered(region, updated, trx);
+      }
+
+      // Outbox emit on DELIVERED — analytics-service derives the delivery
+      // latency from (placedAt, deliveredAt) and feeds delivery_ms_*
+      // rolling sums on the restaurant/branch/platform aggregates.
+      if (nextStatus === OrderStatus.DELIVERED) {
+        await this.outboxRepo.insertOutboxEvent(region, trx, {
+          aggregateType: 'order',
+          aggregateId: updated.publicId,
+          eventType: EVENT_TYPES.ORDER_DELIVERED,
+          payload: {
+            orderId: updated.publicId,
+            region,
+            restaurantId: Number(updated.restaurantId),
+            branchId: Number(updated.branchId),
+            currency: updated.currency,
+            placedAt: new Date(updated.createdAt).toISOString(),
+            deliveredAt: new Date(updated.deliveredAt ?? new Date()).toISOString(),
+          },
+        });
       }
 
       await trx.commit();
@@ -580,6 +673,10 @@ export class OrderService {
    * Webhook-driven transition: pending_payment -> placed. Trusts the caller
    * (KashierWebhookService runs inside the same trx). Idempotent: returns
    * the current row unchanged when the order is already past pending_payment.
+   *
+   * Also writes payment.completed to the outbox so analytics can recognize
+   * online revenue at capture time (the order.placed event was emitted at
+   * pending_payment time when revenue isn't real yet).
    */
   async markPaymentCaptured(
     region: string,
@@ -589,7 +686,7 @@ export class OrderService {
     if (order.status !== OrderStatus.PENDING_PAYMENT) {
       return order;
     }
-    return this.orderRepo.updateStatus(
+    const updated = await this.orderRepo.updateStatus(
       region,
       order.id,
       order.createdAt,
@@ -597,6 +694,36 @@ export class OrderService {
       null,
       trx,
     );
+
+    // Fetch items to include in the analytics payload — required so
+    // agg_product_day rolls forward for online orders too. Single batch
+    // read, in the same trx.
+    const items = await this.orderItemRepo.findByOrderIds(region, [
+      { orderId: updated.id, orderCreatedAt: updated.createdAt },
+    ]);
+
+    await this.outboxRepo.insertOutboxEvent(region, trx, {
+      aggregateType: 'order',
+      aggregateId: updated.publicId,
+      eventType: EVENT_TYPES.PAYMENT_COMPLETED,
+      payload: {
+        orderId: updated.publicId,
+        region,
+        restaurantId: Number(updated.restaurantId),
+        branchId: Number(updated.branchId),
+        total: updated.total,
+        currency: updated.currency,
+        items: items.map((it) => ({
+          productId: Number(it.productId),
+          quantity: it.quantity,
+          unitPriceSnapshot: it.unitPriceSnapshot,
+          lineTotal: it.lineTotal,
+        })),
+        completedAt: new Date().toISOString(),
+      },
+    });
+
+    return updated;
   }
 
   /**

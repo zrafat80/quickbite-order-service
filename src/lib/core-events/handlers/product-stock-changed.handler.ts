@@ -15,6 +15,6 @@ export function createProductStockChangedHandler(
       logger.warn(`malformed payload, skipping: ${JSON.stringify(payload)}`);
       return;
     }
-    await cache.del(cacheKeys.product(p.branchId, p.productId));
+    await cache.del(cacheKeys.productStock(p.branchId, p.productId));
   };
 }

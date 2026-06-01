@@ -11,6 +11,7 @@ import { PermissionCacheService } from '../middleware/guards/permission-cache.se
 import { HandlerRegistryService } from './handler-registry.service';
 import { createBranchDeactivatedHandler } from './handlers/branch-deactivated.handler';
 import { createBranchUpdatedHandler } from './handlers/branch-updated.handler';
+import { createProductMetaChangedHandler } from './handlers/product-meta-changed.handler';
 import { createProductPriceChangedHandler } from './handlers/product-price-changed.handler';
 import { createProductStockChangedHandler } from './handlers/product-stock-changed.handler';
 import { createRbacPermissionsChangedHandler } from './handlers/rbac-permissions-changed.handler';
@@ -25,6 +26,7 @@ import { createRestaurantSuspendedHandler } from './handlers/restaurant-suspende
 const EVENT_TYPES = {
   PRODUCT_STOCK_CHANGED: 'product.stock.changed',
   PRODUCT_PRICE_CHANGED: 'product.price.changed',
+  PRODUCT_META_CHANGED: 'product.meta.changed',
   BRANCH_UPDATED: 'branch.updated',
   BRANCH_DEACTIVATED: 'branch.deactivated',
   RESTAURANT_SUSPENDED: 'restaurant.suspended',
@@ -49,6 +51,10 @@ class CacheInvalidationRegistrar implements OnModuleInit {
     this.registry.register(
       EVENT_TYPES.PRODUCT_PRICE_CHANGED,
       createProductPriceChangedHandler(this.cache),
+    );
+    this.registry.register(
+      EVENT_TYPES.PRODUCT_META_CHANGED,
+      createProductMetaChangedHandler(this.cache),
     );
     this.registry.register(
       EVENT_TYPES.BRANCH_UPDATED,

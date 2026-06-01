@@ -20,6 +20,7 @@ export interface CreateTransactionInput {
   dstAccId: number | null;
   refundedPaymentId?: number | null;
   idempotencyKey: string | null;
+  reason?: string | null;
 }
 
 export interface UpdateTransactionStatusInput {

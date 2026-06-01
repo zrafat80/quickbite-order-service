@@ -345,4 +345,32 @@ export class OrderRepository {
       .whereNotNull('delivery_agent_id');
     return rows.map((r: any) => this.toEntity(r));
   }
+
+  // Orders that have been sitting in 'ready' without a successful assignment.
+  // `last_assignment_at` is NULL until an actual candidate is tried, so we
+  // fall back to `ready_at` for the first sweeper pass. Uses the partial
+  // index idx_orders_status_created_at (status IN ('ready','assigned')).
+  async findStaleReady(region: string, staleSec: number): Promise<OrderEntity[]> {
+    const rows = await this.knex.db(region)('orders')
+      .select(ORDER_COLUMNS as unknown as string[])
+      .where('status', OrderStatus.READY)
+      .whereRaw(
+        `COALESCE(last_assignment_at, ready_at) < NOW() - (? || ' seconds')::interval`,
+        [staleSec],
+      );
+    return rows.map((r: any) => this.toEntity(r));
+  }
+
+  // Stamps last_assignment_at = NOW() without touching status. Called by the
+  // ready-sweeper before re-running tryAssign so a no-candidates outcome
+  // doesn't cause the same row to be re-picked on every 10s tick.
+  async touchAssignmentAttempt(
+    region: string,
+    orderId: number,
+    orderCreatedAt: Date,
+  ): Promise<void> {
+    await this.knex.db(region)('orders')
+      .where({ id: orderId, created_at: orderCreatedAt })
+      .update({ last_assignment_at: this.knex.db(region).fn.now() });
+  }
 }

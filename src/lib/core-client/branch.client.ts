@@ -82,15 +82,27 @@ export class BranchClient {
   ): Promise<CoreBranchProduct[]> {
     if (productIds.length === 0) return [];
 
-    const cachedById = new Map<number, CoreBranchProduct>();
+    // Split projection: meta survives stock churn; stock is hot and short-lived.
+    // For each productId we need BOTH halves; if either is missing we round-trip
+    // to core (single call, one request fetches everything).
+    type MetaPart = Omit<CoreBranchProduct, 'stock'>;
+    const metaById = new Map<number, MetaPart>();
+    const stockById = new Map<number, number>();
+
     await Promise.all(
       productIds.map(async (id) => {
-        const raw = await this.safeGet(cacheKeys.product(branchId, id));
-        if (raw) cachedById.set(id, JSON.parse(raw) as CoreBranchProduct);
+        const [rawMeta, rawStock] = await Promise.all([
+          this.safeGet(cacheKeys.productMeta(branchId, id)),
+          this.safeGet(cacheKeys.productStock(branchId, id)),
+        ]);
+        if (rawMeta) metaById.set(id, JSON.parse(rawMeta) as MetaPart);
+        if (rawStock !== null) stockById.set(id, Number(rawStock));
       }),
     );
 
-    const missingIds = productIds.filter((id) => !cachedById.has(id));
+    const missingIds = productIds.filter(
+      (id) => !metaById.has(id) || !stockById.has(id),
+    );
     if (missingIds.length > 0) {
       const res = await this.http.request<{ data: CoreBranchProduct[] }>({
         method: 'GET',
@@ -98,19 +110,33 @@ export class BranchClient {
         query: { ids: missingIds.join(',') },
       });
       for (const p of res.data ?? []) {
-        cachedById.set(p.productId, p);
-        await this.safeSet(
-          cacheKeys.product(branchId, p.productId),
-          JSON.stringify(p),
-          CACHE_TTL_SECONDS.PRODUCT,
-        );
+        const { stock, ...meta } = p;
+        metaById.set(p.productId, meta);
+        stockById.set(p.productId, stock);
+        // Write each half to its own key with its own TTL. Failures are logged
+        // and swallowed inside safeSet — must never break the request path.
+        await Promise.all([
+          this.safeSet(
+            cacheKeys.productMeta(branchId, p.productId),
+            JSON.stringify(meta),
+            CACHE_TTL_SECONDS.PRODUCT_META,
+          ),
+          this.safeSet(
+            cacheKeys.productStock(branchId, p.productId),
+            String(stock),
+            CACHE_TTL_SECONDS.PRODUCT_STOCK,
+          ),
+        ]);
       }
     }
 
     const out: CoreBranchProduct[] = [];
     for (const id of productIds) {
-      const p = cachedById.get(id);
-      if (p) out.push(p);
+      const meta = metaById.get(id);
+      const stock = stockById.get(id);
+      if (meta && stock !== undefined) {
+        out.push({ ...meta, stock });
+      }
     }
     return out;
   }

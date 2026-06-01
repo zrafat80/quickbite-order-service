@@ -15,6 +15,11 @@ export interface ProductPriceChangedPayload {
   productId: number | string;
 }
 
+export interface ProductMetaChangedPayload {
+  branchId: number | string;
+  productId: number | string;
+}
+
 export interface BranchUpdatedPayload {
   branchId: number | string;
 }

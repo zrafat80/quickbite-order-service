@@ -8,8 +8,8 @@ import { ConfigService } from '@nestjs/config';
 import { OrderRepository } from './repository/order.repository';
 import { OrderEntity } from './entity/order.entity';
 import { OrderStatus } from './enums';
-import { PresenceService } from '../presence/presence.service';
-import { AgentPresenceRepository } from '../presence/repository/agent-presence.repository';
+import { PresenceService } from '../agent/presence.service';
+import { AgentPresenceRepository } from '../agent/repository/agent-presence.repository';
 import { AgentEarningRepository } from '../agent/repository/agent-earning.repository';
 import { RestaurantBalanceRepository } from '../restaurant-finance/repository/restaurant-balance.repository';
 import { TransactionRepository } from '../payment/repository/transaction.repository';
@@ -25,7 +25,7 @@ import {
 } from '../payment/enums';
 import {REDIS_CLIENT} from "../../lib/cache/redis.module";
 import Redis from "ioredis";
-import {presenceKeys} from "../presence/presence.constants";
+import {presenceKeys} from "../agent/presence.constants";
 
 @Injectable()
 export class AssignmentService {
@@ -251,6 +251,8 @@ export class AssignmentService {
    * Orchestrates the maintenance of active assignments.
    * 1. Reassigns "Ignored" orders (Online drivers who didn't respond in 60s).
    * 2. Reassigns "Stale" orders (Drivers who went offline or lost heartbeat).
+   * 3. Re-attempts stuck "Ready" orders (initial tryAssign found no candidates
+   *    — e.g. region empty, all rejected — and nothing else retries them).
    */
   async performSweep(region: string): Promise<void> {
     // A. Handle Ignored Assignments (Drivers who are silent for > 60s)
@@ -266,27 +268,46 @@ export class AssignmentService {
 
     // B. Handle Stale/Offline Agents
     const assigned = await this.orderRepo.findAllAssigned(region);
-    if (assigned.length === 0) return;
+    if (assigned.length > 0) {
+      const agentIds = [...new Set(assigned.map(o => Number(o.deliveryAgentId)))];
+      const metaMap = await this.presenceService.getAgentsMeta(region, agentIds);
 
-    const agentIds = [...new Set(assigned.map(o => Number(o.deliveryAgentId)))];
-    const metaMap = await this.presenceService.getAgentsMeta(region, agentIds);
+      const now = Date.now();
+      const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-    const now = Date.now();
-    const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+      const stale = assigned.filter(order => {
+        const agentId = Number(order.deliveryAgentId);
+        const presence = metaMap.get(agentId);
+        if (!presence || !presence.isOnline) return true; // Offline
+        return (now - presence.lastSeenAt) > HEARTBEAT_TIMEOUT_MS; // Missing heartbeat
+      });
 
-    const stale = assigned.filter(order => {
-      const agentId = Number(order.deliveryAgentId);
-      const presence = metaMap.get(agentId);
-      if (!presence || !presence.isOnline) return true; // Offline
-      return (now - presence.lastSeenAt) > HEARTBEAT_TIMEOUT_MS; // Missing heartbeat
-    });
+      if (stale.length > 0) {
+        this.logger.warn(`Sweep: Found ${stale.length} stale/offline agents in ${region}. Reassigning...`);
+        for (const order of stale) {
+          if (!order.deliveryAgentId) continue;
+          await this.handleAgentReject(region, order.id, order.createdAt, order.deliveryAgentId)
+            .catch(err => this.logger.error(`Sweep: Failed to reassign stale order ${order.publicId}: ${err.message}`));
+        }
+      }
+    }
 
-    if (stale.length > 0) {
-      this.logger.warn(`Sweep: Found ${stale.length} stale/offline agents in ${region}. Reassigning...`);
-      for (const order of stale) {
-        if (!order.deliveryAgentId) continue;
-        await this.handleAgentReject(region, order.id, order.createdAt, order.deliveryAgentId)
-          .catch(err => this.logger.error(`Sweep: Failed to reassign stale order ${order.publicId}: ${err.message}`));
+    // C. Re-attempt stuck Ready orders. tryAssign on PREPARING→READY is
+    // fire-and-forget — if it returned no candidates, nothing else retries.
+    // We bump last_assignment_at first so a still-empty region doesn't cause
+    // us to re-pick the same row on the next 10s tick.
+    const staleSec =
+      this.configService.get<number>('deliveries.readyStaleSec') ?? 60;
+    const staleReady = await this.orderRepo.findStaleReady(region, staleSec);
+    if (staleReady.length > 0) {
+      this.logger.warn(`Sweep: Found ${staleReady.length} stuck ready orders in ${region}. Retrying...`);
+      for (const order of staleReady) {
+        try {
+          await this.orderRepo.touchAssignmentAttempt(region, order.id, order.createdAt);
+          await this.tryAssign(region, order.id, order.createdAt);
+        } catch (err) {
+          this.logger.error(`Sweep: Failed to retry ready order ${order.publicId}: ${(err as Error).message}`);
+        }
       }
     }
   }
@@ -329,25 +350,31 @@ export class AssignmentService {
 
     // 4. Agent earning = deliveryFee − commission (the agent's share).
     //    deliveryFee = 1500, commission = 300 → agentEarning = 1200 (80%)
-    if (order.deliveryAgentId) {
-      const earningAmount = branch.deliveryFee - commission;
-
-      await this.earningRepo.insertIdempotent(region, {
-        region,
-        agentId: order.deliveryAgentId,
-        orderId: order.id,
-        orderCreatedAt: order.createdAt,
-        amount: earningAmount,
-        currency: order.currency,
-      }, trx);
-    }
+    const earningAmount = branch.deliveryFee - commission;
+    await this.earningRepo.insertIdempotent(region, {
+      region,
+      agentId: order.deliveryAgentId!,
+      orderId: order.id,
+      orderCreatedAt: order.createdAt,
+      amount: earningAmount,
+      currency: order.currency,
+    }, trx);
 
     // 5. Persist commission on the order row
     await trx('orders')
       .where({ id: order.id, created_at: order.createdAt })
       .update({ commission, updated_at: trx.fn.now() });
 
-    // 6. Insert commission transaction
+    // 6. Insert per-order ledger legs (double-entry; the sum of all leg amounts
+    //    equals the original charge / cod_collection amount = order.total):
+    //      - COMMISSION       → platform's cut of delivery_fee
+    //      - AGENT_EARNING    → agent's share of delivery_fee
+    //      - RESTAURANT_CREDIT→ restaurant's share (subtotal)
+    //      - SERVICE_FEE      → platform-collected service fee (skipped if 0)
+    //    Pre: order.deliveryAgentId is non-null — the status machine enforces
+    //    assigned → picked → delivered, so a delivered order always has an agent.
+    //    All idempotency-keyed by order.publicId so a duplicate settleDelivered
+    //    cannot double-insert.
     await this.transactionRepo.create(
       region,
       {
@@ -368,8 +395,72 @@ export class AssignmentService {
       trx,
     );
 
-    // 7. Credit restaurant balance with the full subtotal
-    //    (Commission is the platform's cut of the delivery fee, not restaurant revenue)
+    const agentShare = branch.deliveryFee - commission;
+    await this.transactionRepo.create(
+      region,
+      {
+        region,
+        orderId: order.id,
+        orderCreatedAt: order.createdAt,
+        transactionType: TransactionType.AGENT_EARNING,
+        method: TransactionMethod.SYSTEM,
+        providerId: null,
+        providerReferenceId: null,
+        status: TransactionStatus.SUCCEEDED,
+        amount: agentShare,
+        currency: order.currency,
+        srcAccId: null,
+        dstAccId: order.deliveryAgentId,
+        idempotencyKey: `agent_earning:${order.publicId}`,
+      },
+      trx,
+    );
+
+    await this.transactionRepo.create(
+      region,
+      {
+        region,
+        orderId: order.id,
+        orderCreatedAt: order.createdAt,
+        transactionType: TransactionType.RESTAURANT_CREDIT,
+        method: TransactionMethod.SYSTEM,
+        providerId: null,
+        providerReferenceId: null,
+        status: TransactionStatus.SUCCEEDED,
+        amount: order.subtotal,
+        currency: order.currency,
+        srcAccId: null,
+        dstAccId: branch.restaurantId,
+        idempotencyKey: `restaurant_credit:${order.publicId}`,
+      },
+      trx,
+    );
+
+    if (order.serviceFee > 0) {
+      await this.transactionRepo.create(
+        region,
+        {
+          region,
+          orderId: order.id,
+          orderCreatedAt: order.createdAt,
+          transactionType: TransactionType.SERVICE_FEE,
+          method: TransactionMethod.SYSTEM,
+          providerId: null,
+          providerReferenceId: null,
+          status: TransactionStatus.SUCCEEDED,
+          amount: order.serviceFee,
+          currency: order.currency,
+          srcAccId: null,
+          dstAccId: null,
+          idempotencyKey: `service_fee:${order.publicId}`,
+        },
+        trx,
+      );
+    }
+
+    // 7. Credit restaurant balance with the full subtotal.
+    //    `restaurant_balances` is a denormalized projection of the
+    //    RESTAURANT_CREDIT (and future restaurant-impacting) leg rows above.
     await this.balanceRepo.incrementBalance(
       region,
       branch.restaurantId,

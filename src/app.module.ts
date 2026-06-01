@@ -27,13 +27,13 @@ import { MessagingModule } from './lib/messaging/messaging.module';
 import { CoreEventsModule } from './lib/core-events/core-events.module';
 import { CacheInvalidationModule } from './lib/core-events/cache-invalidation.module';
 import { CoreClientModule } from './lib/core-client/core-client.module';
+import { EventsModule } from './lib/events/events.module';
 import { AuthUtilsModule } from './lib/auth/auth-utils.module';
 import { PermissionsModule } from './lib/middleware/guards/permissions.module';
 import { WsModule } from './lib/websocket/ws.module';
 import { HealthModule } from './app/health/health.module';
 import { OrderModule } from './app/order/order.module';
 import { PaymentModule } from './app/payment/payment.module';
-import { PresenceModule } from './app/presence/presence.module';
 import { AgentModule } from './app/agent/agent.module';
 import { RestaurantFinanceModule } from './app/restaurant-finance/restaurant-finance.module';
 import { JobsModule } from './lib/jobs/jobs.module';
@@ -68,6 +68,7 @@ import { JobsModule } from './lib/jobs/jobs.module';
     MessagingModule,
     CoreEventsModule,
     CacheInvalidationModule,
+    EventsModule,
     CoreClientModule,
     AuthUtilsModule,
     PermissionsModule,
@@ -77,7 +78,6 @@ import { JobsModule } from './lib/jobs/jobs.module';
     HealthModule,
     OrderModule,
     PaymentModule,
-    PresenceModule,
     AgentModule,
     RestaurantFinanceModule,
     JobsModule,
