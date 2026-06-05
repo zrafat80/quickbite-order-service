@@ -98,6 +98,11 @@ export default () => {
     rabbit: {
       url: process.env.RABBITMQ_URL as string,
       exchange: process.env.RABBITMQ_CORE_EVENTS_EXCHANGE || 'core.events',
+      alternateExchange:
+        process.env.RABBITMQ_CORE_EVENTS_AE || 'core.events.unroutable',
+      alternateQueue:
+        process.env.RABBITMQ_CORE_EVENTS_UNROUTABLE_QUEUE ||
+        'core.events.unroutable.dlq',
       queue: process.env.RABBITMQ_CORE_EVENTS_QUEUE || 'order-service.core-events',
       bindings: (process.env.RABBITMQ_CORE_EVENTS_BINDINGS ||
         'product.#,branch.#,restaurant.#,rbac.#')

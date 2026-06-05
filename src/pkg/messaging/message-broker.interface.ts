@@ -9,6 +9,8 @@ export interface ConsumerOptions {
   queue: string;
   exchange: string;
   bindingKeys: string[];
+  alternateExchange?: string;
+  alternateQueue?: string;
   deadLetterExchange?: string;
   deadLetterQueue?: string;
   prefetch: number;

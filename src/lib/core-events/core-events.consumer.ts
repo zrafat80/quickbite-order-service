@@ -48,6 +48,12 @@ export class CoreEventsConsumer implements OnModuleInit {
   async onModuleInit() {
     const topology: ConsumerOptions = {
       exchange: this.configService.get<string>('rabbit.exchange') ?? 'core.events',
+      alternateExchange:
+        this.configService.get<string>('rabbit.alternateExchange') ??
+        'core.events.unroutable',
+      alternateQueue:
+        this.configService.get<string>('rabbit.alternateQueue') ??
+        'core.events.unroutable.dlq',
       queue:
         this.configService.get<string>('rabbit.queue') ??
         'order-service.core-events',

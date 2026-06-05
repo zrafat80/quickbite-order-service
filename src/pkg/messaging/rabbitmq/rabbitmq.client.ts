@@ -97,7 +97,20 @@ export class RabbitMQClient implements IMessageBroker {
 
 // "assert" = create if missing, else verify settings match. Always idempotent.
 async function assertTopology(ch: ConfirmChannel, opts: ConsumerOptions): Promise<void> {
-  await ch.assertExchange(opts.exchange, 'topic', { durable: true });
+  if (opts.alternateExchange && opts.alternateQueue) {
+    await ch.assertExchange(opts.alternateExchange, 'fanout', {
+      durable: true,
+    });
+    await ch.assertQueue(opts.alternateQueue, { durable: true });
+    await ch.bindQueue(opts.alternateQueue, opts.alternateExchange, '');
+  }
+
+  await ch.assertExchange(opts.exchange, 'topic', {
+    durable: true,
+    arguments: opts.alternateExchange
+      ? { 'alternate-exchange': opts.alternateExchange }
+      : undefined,
+  });
 
   if (opts.deadLetterExchange && opts.deadLetterQueue) {
     await ch.assertExchange(opts.deadLetterExchange, 'topic', { durable: true });
