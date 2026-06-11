@@ -414,6 +414,24 @@ export class OrderService {
 
     const actor = await this.buildActor(user);
 
+    // Ownership must be checked before transition-specific business rules so a
+    // foreign actor cannot infer the target order's state or age.
+    if (actor.kind === 'customer' && Number(current.customerId) !== Number(user.userId)) {
+      throw new ForbiddenException(ORDER_ERRORS.FORBIDDEN);
+    }
+    if (actor.kind === 'restaurant') {
+      const isSameRestaurant =
+        Number(actor.restaurantId) === Number(current.restaurantId);
+      const hasBranchAccess =
+        user.restaurantRole === 'owner' ||
+        (Array.isArray(user.branchIds) &&
+          user.branchIds.includes(Number(current.branchId)));
+
+      if (!isSameRestaurant || !hasBranchAccess) {
+        throw new ForbiddenException(ORDER_ERRORS.FORBIDDEN);
+      }
+    }
+
     // Customer cancel window: only while status is PLACED and within 60s of created_at.
     if (
       nextStatus === OrderStatus.CANCELLED &&
@@ -424,20 +442,6 @@ export class OrderService {
       if (ageMs > 60_000) {
         throw new ConflictException(ORDER_ERRORS.CANCEL_WINDOW_EXPIRED);
       }
-    }
-
-    // Customer can only act on their own order.
-    if (actor.kind === 'customer' && Number(current.customerId) !== Number(user.userId)) {
-      throw new ForbiddenException(ORDER_ERRORS.FORBIDDEN);
-    }
-    // Restaurant user must belong to the branch (when branchIds are scoped).
-    if (
-      actor.kind === 'restaurant' &&
-      Array.isArray(user.branchIds) &&
-      user.branchIds.length > 0 &&
-      !user.branchIds.includes(Number(current.branchId))
-    ) {
-      throw new ForbiddenException(ORDER_ERRORS.FORBIDDEN);
     }
 
     const { timestampColumn } = this.statusService.assertTransition(

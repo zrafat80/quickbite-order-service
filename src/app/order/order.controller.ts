@@ -6,6 +6,7 @@ import {
   Headers,
   Param,
   ParseIntPipe,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -70,7 +71,7 @@ export class OrderController {
   @UseGuards(JwtAuthGuard)
   async getOrder(
       @Req() req: Request,
-      @Param('publicId') publicId: string,
+      @Param('publicId', new ParseUUIDPipe({ version: '4' })) publicId: string,
   ): Promise<OrderResponseDTO> {
     const region = req.region ?? '';
     const { order, items } = await this.orderService.getOrder(
@@ -86,7 +87,7 @@ export class OrderController {
   @UseGuards(JwtAuthGuard)
   async updateOrderStatus(
       @Req() req: Request,
-      @Param('publicId') publicId: string,
+      @Param('publicId', new ParseUUIDPipe({ version: '4' })) publicId: string,
       @Body() body: UpdateOrderStatusRequestDTO,
   ): Promise<OrderStatusResponseDTO> {
     const region = req.region ?? '';

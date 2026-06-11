@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../../lib/middleware/guards/jwtGuard';
 import { PermissionsGuard } from '../../lib/middleware/guards/permissions.guard';
@@ -39,9 +39,14 @@ export class RestaurantFinanceController {
     
     const now = new Date();
     const from = req.query.from
-      ? new Date(req.query.from as string)
+      ? this.parseDate(req.query.from as string, 'from')
       : new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
-    const to = req.query.to ? new Date(req.query.to as string) : now;
+    const to = req.query.to
+      ? this.parseDate(req.query.to as string, 'to')
+      : now;
+    if (from >= to) {
+      throw new BadRequestException('"from" must be before "to"');
+    }
 
     const params = parsePaginationQuery(
       { ...req.query, sortBy: 'createdAt', sortOrder: 'desc' },
@@ -76,5 +81,13 @@ export class RestaurantFinanceController {
     );
 
     return PayoutResponseDTO.from(payout);
+  }
+
+  private parseDate(value: string, field: string): Date {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(`Invalid ${field} date`);
+    }
+    return parsed;
   }
 }

@@ -9,6 +9,7 @@ import {
   Logger,
   Param,
   Patch,
+  ParseUUIDPipe,
   Post,
   Query,
   Req,
@@ -121,6 +122,9 @@ export class AgentController {
     this.assertAgent(req);
     const region = this.requireRegion(req);
     const status = req.query.status as string | undefined;
+    if (status && !Object.values(OrderStatus).includes(status as OrderStatus)) {
+      throw new BadRequestException(`Invalid status "${status}"`);
+    }
     const params = parsePaginationQuery(
       { ...req.query, sortBy: 'createdAt', sortOrder: 'desc' },
       TASK_COLUMN_MAP,
@@ -144,9 +148,14 @@ export class AgentController {
 
     const now = new Date();
     const from = req.query.from
-      ? new Date(req.query.from as string)
+      ? this.parseDate(req.query.from as string, 'from')
       : new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
-    const to = req.query.to ? new Date(req.query.to as string) : now;
+    const to = req.query.to
+      ? this.parseDate(req.query.to as string, 'to')
+      : now;
+    if (from >= to) {
+      throw new BadRequestException('"from" must be before "to"');
+    }
 
     const params = parsePaginationQuery(
       { ...req.query, sortBy: 'earnedAt', sortOrder: 'desc' },
@@ -176,7 +185,7 @@ export class AgentController {
   @UseGuards(JwtAuthGuard)
   async updateDeliveryStatus(
     @Req() req: Request,
-    @Param('publicId') publicId: string,
+    @Param('publicId', new ParseUUIDPipe({ version: '4' })) publicId: string,
     @Body() body: UpdateDeliveryStatusRequestDTO,
   ): Promise<OrderStatusResponseDTO> {
     this.assertAgent(req);
@@ -220,7 +229,7 @@ export class AgentController {
   @RequirePermissions('deliveries', 'assign')
   async adminAssign(
     @Req() req: Request,
-    @Param('publicId') publicId: string,
+    @Param('publicId', new ParseUUIDPipe({ version: '4' })) publicId: string,
     @Body() body: AssignAgentRequestDTO,
   ): Promise<AssignmentResponseDTO> {
     const region = this.requireRegion(req);
@@ -244,7 +253,7 @@ export class AgentController {
   @RequirePermissions('deliveries', 'assign')
   async adminReassign(
     @Req() req: Request,
-    @Param('publicId') publicId: string,
+    @Param('publicId', new ParseUUIDPipe({ version: '4' })) publicId: string,
   ): Promise<{ ok: boolean; assigned: boolean }> {
     const region = this.requireRegion(req);
     const order = await this.orderRepo.findByPublicId(region, publicId);
@@ -319,5 +328,13 @@ export class AgentController {
       throw new BadRequestException(PRESENCE_ERRORS.REGION_REQUIRED);
     }
     return region;
+  }
+
+  private parseDate(value: string, field: string): Date {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(`Invalid ${field} date`);
+    }
+    return parsed;
   }
 }

@@ -1,4 +1,4 @@
-import { IsEnum, IsInt } from 'class-validator';
+import { IsEnum, IsInt, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 // Agent delivery-status transitions: accept, pickup, deliver, reject.
@@ -18,5 +18,6 @@ export class UpdateDeliveryStatusRequestDTO {
 export class AssignAgentRequestDTO {
   @Type(() => Number)
   @IsInt()
+  @Min(1)
   agentId!: number;
 }

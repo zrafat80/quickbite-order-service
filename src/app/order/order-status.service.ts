@@ -1,4 +1,8 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { OrderStatus } from './enums';
 import { ORDER_ERRORS } from './order.constants';
 
@@ -53,8 +57,8 @@ const RULES: TransitionRule[] = [
 @Injectable()
 export class OrderStatusService {
   /**
-   * Throws ConflictException if the actor is not allowed to perform the
-   * requested transition. Returns the timestamp column to stamp (if any).
+   * Throws ConflictException for invalid lifecycle transitions and
+   * ForbiddenException for unauthorized actors. Returns the timestamp column.
    */
   assertTransition(
     from: OrderStatus,
@@ -68,13 +72,13 @@ export class OrderStatusService {
       );
     }
     if (!rule.actors.includes(actor.kind)) {
-      throw new ConflictException(
+      throw new ForbiddenException(
         `${ORDER_ERRORS.INVALID_STATUS_TRANSITION} (actor=${actor.kind})`,
       );
     }
     if (rule.permission && actor.kind === 'restaurant') {
       if (!actor.permissions.has(rule.permission)) {
-        throw new ConflictException(
+        throw new ForbiddenException(
           `${ORDER_ERRORS.INVALID_STATUS_TRANSITION} (missing ${rule.permission})`,
         );
       }
