@@ -24,7 +24,7 @@ function parseRegions(raw: string | undefined): string[] {
 }
 
 function readShardConfig(region: string, prefix: 'DB' | 'ARCHIVE_DB'): ShardConfig {
-  const host = process.env[`${prefix}_${region}_HOST`];
+  const host = process.env[`${prefix}_${region}_HOST`] || 'localhost';
   const port = process.env[`${prefix}_${region}_PORT`];
   const username = process.env[`${prefix}_${region}_USERNAME`];
   const password = process.env[`${prefix}_${region}_PASSWORD`];
@@ -96,7 +96,7 @@ export default () => {
     },
 
     rabbit: {
-      url: process.env.RABBITMQ_URL as string,
+      url: process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672',
       exchange: process.env.RABBITMQ_CORE_EVENTS_EXCHANGE || 'core.events',
       alternateExchange:
         process.env.RABBITMQ_CORE_EVENTS_AE || 'core.events.unroutable',

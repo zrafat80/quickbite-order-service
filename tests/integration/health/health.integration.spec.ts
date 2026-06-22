@@ -1,5 +1,20 @@
 import request from 'supertest';
+import type { Knex } from 'knex';
 import { useOrderIntegrationApp } from '../helpers/test-app';
+
+async function waitForRequestLog(database: Knex): Promise<void> {
+  const deadline = Date.now() + 2_000;
+
+  while (Date.now() < deadline) {
+    const log = await database('logs')
+      .where({ endpoint: '/api/health' })
+      .first();
+    if (log) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error('Timed out waiting for the health request log');
+}
 
 describe('Health HTTP integration', () => {
   const testApp = useOrderIntegrationApp();
@@ -37,9 +52,7 @@ describe('Health HTTP integration', () => {
         .set('x-region', 'eg')
         .expect(200);
 
-      await expect(
-        testApp.database('logs').where({ endpoint: '/api/health' }).first(),
-      ).resolves.toBeDefined();
+      await expect(waitForRequestLog(testApp.database)).resolves.toBeUndefined();
     });
   });
 });

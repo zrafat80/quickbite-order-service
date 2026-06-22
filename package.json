@@ -1,6 +1,7 @@
 {
   "name": "order-service",
   "version": "0.0.1",
+  "packageManager": "pnpm@11.8.0",
   "description": "QuickBite — orders, payments, deliveries, restaurant finance",
   "private": true,
   "license": "UNLICENSED",
@@ -19,8 +20,8 @@
     "test:integration": "jest --config ./tests/integration/jest.config.js --runInBand",
     "test:integration:watch": "jest --config ./tests/integration/jest.config.js --runInBand --watch",
     "test:integration:cov": "jest --config ./tests/integration/jest.config.js --runInBand --coverage",
-    "test:e2e": "npm run test:integration",
-    "test:all": "npm run test:unit && npm run test:integration",
+    "test:e2e": "pnpm run test:integration",
+    "test:all": "pnpm run test:unit && pnpm run test:integration",
     "migrate": "knex migrate:latest --knexfile knexfile.ts",
     "migrate:rollback": "knex migrate:rollback --knexfile knexfile.ts",
     "migrate:make": "knex migrate:make --knexfile knexfile.ts",

@@ -1,0 +1,16 @@
+# Ignore heavy dependencies (Docker installs its own!)
+node_modules/
+.pnpm-store/
+dist/
+
+# Ignore local environment secrets
+.env
+
+# Ignore Git history and logs
+.git/
+npm-debug.log
+error.log
+
+# Ignore Docker files
+Dockerfile
+docker-compose.yml

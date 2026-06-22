@@ -4,7 +4,7 @@ import path from 'path';
 
 config({
   path: path.resolve(process.cwd(), '.env.test'),
-  override: true,
+  override: false,
 });
 
 jest.setTimeout(60_000);
