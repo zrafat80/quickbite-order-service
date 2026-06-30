@@ -3,8 +3,9 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { Knex } from 'knex';
 import { ConfigService } from '@nestjs/config';
+import { Knex } from 'knex';
+
 import { OrderRepository } from './repository/order.repository';
 import { OrderEntity } from './entity/order.entity';
 import { OrderStatus } from './enums';
