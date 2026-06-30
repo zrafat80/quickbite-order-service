@@ -7,8 +7,8 @@ import { ConfigService } from '@nestjs/config';
 import { Knex } from 'knex';
 import { OrderStatus } from './enums';
 import { OrderRepository } from './repository/order.repository';
-import { OrderEntity } from './entity/order.entity';
 
+import { OrderEntity } from './entity/order.entity';
 import { PresenceService } from '../agent/presence.service';
 import { AgentPresenceRepository } from '../agent/repository/agent-presence.repository';
 import { AgentEarningRepository } from '../agent/repository/agent-earning.repository';
