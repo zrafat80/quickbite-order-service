@@ -15,7 +15,7 @@ env:
   ECR_REPO: order-service
   ECS_SERVICE: order-service
   MIGRATE_TASKDEF: order-migrate
-  SUBNETS: subnet-027efc40e0e294d81,subnet-07e4e2cd3d6948763
+  SUBNETS: subnet-027efc40e0e294d81
   ECS_SG: sg-0c1a5bb58a8c8ca2e
 
 jobs:
