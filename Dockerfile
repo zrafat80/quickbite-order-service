@@ -33,7 +33,7 @@ COPY --from=builder /app/dist ./dist
 ENV NODE_ENV=production
 
 # 2. The Documentation
-EXPOSE 4000
+EXPOSE 3000
 
 # 3. The Security Lockdown (Strip Admin rights)
 USER node

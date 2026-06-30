@@ -29,6 +29,8 @@ export interface BuildShardedKnexInput {
 }
 
 function buildPool(shard: ShardConfig, input: BuildShardedKnexInput): Knex.Config {
+  const isProduction = process.env.NODE_ENV === 'production';
+
   return {
     client: 'pg',
     connection: {
@@ -37,6 +39,7 @@ function buildPool(shard: ShardConfig, input: BuildShardedKnexInput): Knex.Confi
       user: shard.username,
       password: shard.password,
       database: shard.name,
+      ssl: isProduction ? { rejectUnauthorized: false } : false,
     },
     pool: { min: 0, max: input.poolMax },
     migrations: input.migrations,

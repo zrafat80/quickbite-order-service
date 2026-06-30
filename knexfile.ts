@@ -44,6 +44,7 @@ const config: Knex.Config = {
     user,
     password: password ?? '',
     database,
+    ssl: isProduction ? { rejectUnauthorized: false } : false,
   },
   pool: {
     min: 0,
