@@ -1,0 +1,80 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+  ECS_CLUSTER: quickbite-1
+  ECR_REPO: order-service
+  ECS_SERVICE: order-service
+  MIGRATE_TASKDEF: order-migrate
+  SUBNETS: subnet-0fdefa7a7aa6fa530,subnet-0f3627200b9594d59
+  ECS_SG: sg-037cca9b47845b4a7
+
+jobs:
+  test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        run: |
+          docker compose -f docker-compose.test.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from order-integration-test
+
+      - name: Stop containers
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v --remove-orphans
+
+  deploy:
+    name: Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        run: |
+          REG=${{ steps.ecr.outputs.registry }}
+          IMG=$REG/${{ env.ECR_REPO }}:${{ github.sha }}
+          docker build -t "$IMG" -t "$REG/${{ env.ECR_REPO }}:latest" .
+          docker push "$REG/${{ env.ECR_REPO }}" --all-tags
+
+      - name: Migrate
+        run: |
+          ARN=$(aws ecs run-task \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --task-definition "${{ env.MIGRATE_TASKDEF }}" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ env.SUBNETS }}],securityGroups=[${{ env.ECS_SG }}],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' \
+            --output text)
+          test "$ARN" != "None"
+          aws ecs wait tasks-stopped --cluster "${{ env.ECS_CLUSTER }}" --tasks "$ARN"
+          CODE=$(aws ecs describe-tasks --cluster "${{ env.ECS_CLUSTER }}" --tasks "$ARN" --query 'tasks[0].containers[0].exitCode' --output text)
+          test "$CODE" = "0"
+
+      - name: Deploy service
+        run: aws ecs update-service --cluster "${{ env.ECS_CLUSTER }}" --service "${{ env.ECS_SERVICE }}" --force-new-deployment
