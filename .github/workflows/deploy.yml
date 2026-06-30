@@ -64,15 +64,43 @@ jobs:
 
       - name: Migrate
         run: |
-          ARN=$(aws ecs run-task \
+          set -o pipefail
+          aws ecs run-task \
             --cluster "${{ env.ECS_CLUSTER }}" \
             --task-definition "${{ env.MIGRATE_TASKDEF }}" \
             --launch-type FARGATE \
             --network-configuration "awsvpcConfiguration={subnets=[${{ env.SUBNETS }}],securityGroups=[${{ env.ECS_SG }}],assignPublicIp=DISABLED}" \
-            --query 'tasks[0].taskArn' \
-            --output text)
+            --output json | tee run-task.json
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("run-task.json"))
+          failures = data.get("failures") or []
+          if failures:
+              print("ECS run-task failures:")
+              print(json.dumps(failures, indent=2))
+              sys.exit(1)
+          tasks = data.get("tasks") or []
+          if not tasks:
+              print("ECS run-task returned no tasks")
+              print(json.dumps(data, indent=2))
+              sys.exit(1)
+          print(tasks[0]["taskArn"])
+          open("task-arn.txt", "w").write(tasks[0]["taskArn"])
+          PY
+          ARN=$(cat task-arn.txt)
           test "$ARN" != "None"
           aws ecs wait tasks-stopped --cluster "${{ env.ECS_CLUSTER }}" --tasks "$ARN"
+          aws ecs describe-tasks --cluster "${{ env.ECS_CLUSTER }}" --tasks "$ARN" --output json | tee describe-task.json
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("describe-task.json"))
+          task = data["tasks"][0]
+          print("Stopped reason:", task.get("stoppedReason"))
+          for c in task.get("containers", []):
+              print("Container:", c.get("name"))
+              print("Exit code:", c.get("exitCode"))
+              print("Reason:", c.get("reason"))
+          PY
           CODE=$(aws ecs describe-tasks --cluster "${{ env.ECS_CLUSTER }}" --tasks "$ARN" --query 'tasks[0].containers[0].exitCode' --output text)
           test "$CODE" = "0"
 
