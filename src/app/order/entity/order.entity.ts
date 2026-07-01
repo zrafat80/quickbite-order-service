@@ -6,7 +6,10 @@ export class OrderEntity {
   publicId!: string;
   countryCode!: string;
   restaurantId!: number;
+  restaurantOwnerId!: number | null;
   branchId!: number;
+  branchLat!: number | null;
+  branchLng!: number | null;
   customerId!: number;
   customerAddressId!: number;
   deliveryLat!: number;

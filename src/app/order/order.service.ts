@@ -151,7 +151,10 @@ export class OrderService {
         publicId: uuidv4(),
         countryCode: branch.countryCode,
         restaurantId: branch.restaurantId,
+        restaurantOwnerId: branch.restaurantOwnerId ?? null,
         branchId: branch.id,
+        branchLat: branch.lat,
+        branchLng: branch.lng,
         customerId: user.userId,
         customerAddressId: address.id,
         deliveryLat: address.lat,
@@ -473,6 +476,7 @@ export class OrderService {
           payload: {
             orderId: updated.publicId,
             region,
+            countryCode: updated.countryCode,
             restaurantId: Number(updated.restaurantId),
             branchId: Number(updated.branchId),
             currency: updated.currency,
@@ -576,6 +580,7 @@ export class OrderService {
           payload: {
             orderId: updated.publicId,
             region,
+            countryCode: updated.countryCode,
             restaurantId: Number(updated.restaurantId),
             branchId: Number(updated.branchId),
             currency: updated.currency,
@@ -713,6 +718,7 @@ export class OrderService {
       payload: {
         orderId: updated.publicId,
         region,
+        countryCode: updated.countryCode,
         restaurantId: Number(updated.restaurantId),
         branchId: Number(updated.branchId),
         total: updated.total,

@@ -1,6 +1,7 @@
 export interface CoreBranchMetadata {
   id: number;
   restaurantId: number;
+  restaurantOwnerId?: number;
   restaurantStatus: string;
   restaurantName: string;
   countryCode: string;
