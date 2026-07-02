@@ -57,10 +57,35 @@ function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
 }
 
+function parseJsonObject(raw: string | undefined): Record<string, unknown> {
+  if (!raw || raw.trim() === "") return {};
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected KASHIER_SECRET_JSON to be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function pickString(
+  source: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return undefined;
+}
+
 export default () => {
   const regions = parseRegions(process.env.REGIONS);
   const hotShards: Record<string, ShardConfig> = {};
   const archiveShards: Record<string, ShardConfig> = {};
+  const kashierSecret = parseJsonObject(process.env.KASHIER_SECRET_JSON);
+  const kashierApiKey =
+    process.env.KASHIER_API_KEY ??
+    pickString(kashierSecret, ["KASHIER_API_KEY", "api_key", "apiKey"]);
+
   for (const region of regions) {
     hotShards[region] = readShardConfig(region, "DB");
     // Archive triples are read lazily — best-effort in dev. The factory only
@@ -149,27 +174,86 @@ export default () => {
 
     kashier: {
       // POST /v3/payment/sessions; in test mode use https://test-api.kashier.io.
-      baseUrl: process.env.KASHIER_BASE_URL || "https://api.kashier.io",
+      baseUrl:
+        process.env.KASHIER_BASE_URL ||
+        pickString(kashierSecret, [
+          "KASHIER_BASE_URL",
+          "base_url",
+          "baseUrl",
+        ]) ||
+        "https://api.kashier.io",
       // PUT /orders/:orderId/ for refunds; in test mode use https://test-fep.kashier.io.
-      fepUrl: process.env.KASHIER_FEP_URL || "https://fep.kashier.io",
-      merchantId: process.env.KASHIER_MERCHANT_ID || "",
+      fepUrl:
+        process.env.KASHIER_FEP_URL ||
+        pickString(kashierSecret, ["KASHIER_FEP_URL", "fep_url", "fepUrl"]) ||
+        "https://fep.kashier.io",
+      merchantId:
+        process.env.KASHIER_MERCHANT_ID ||
+        pickString(kashierSecret, [
+          "KASHIER_MERCHANT_ID",
+          "merchant_id",
+          "merchantId",
+        ]) ||
+        "",
       // Payment API Key — used for `api-key` header AND order-hash AND webhook
       // signature verification (HMAC-SHA256). Distinct from secretKey below.
-      apiKey: process.env.KASHIER_API_KEY || "",
+      apiKey: kashierApiKey || "",
       // Secret Key — used for the `Authorization` header on every API call.
-      secretKey: process.env.KASHIER_SECRET_KEY || "",
+      secretKey:
+        process.env.KASHIER_SECRET_KEY ||
+        pickString(kashierSecret, [
+          "KASHIER_SECRET_KEY",
+          "secret_key",
+          "secretKey",
+          "secret",
+        ]) ||
+        "",
       // Webhook signature secret. Default to apiKey since Kashier signs
       // webhooks with the Payment API Key, but kept overridable for rotation.
       webhookSecret:
-        process.env.KASHIER_WEBHOOK_SECRET || process.env.KASHIER_API_KEY || "",
-      returnUrl: process.env.KASHIER_RETURN_URL || "",
-      failUrl: process.env.KASHIER_FAIL_URL || "",
+        process.env.KASHIER_WEBHOOK_SECRET ||
+        pickString(kashierSecret, [
+          "KASHIER_WEBHOOK_SECRET",
+          "webhook_secret",
+          "webhookSecret",
+        ]) ||
+        kashierApiKey ||
+        "",
+      returnUrl:
+        process.env.KASHIER_RETURN_URL ||
+        pickString(kashierSecret, [
+          "KASHIER_RETURN_URL",
+          "return_url",
+          "returnUrl",
+        ]) ||
+        "",
+      failUrl:
+        process.env.KASHIER_FAIL_URL ||
+        pickString(kashierSecret, [
+          "KASHIER_FAIL_URL",
+          "fail_url",
+          "failUrl",
+        ]) ||
+        "",
       // Optional override for the webhook URL Kashier will POST back to.
       // When present we send it as `serverWebhook` on every session.
       // Useful with ngrok in dev: KASHIER_SERVER_WEBHOOK=https://xxx.ngrok.io/api/payments/webhook/kashier.
-      serverWebhookUrl: process.env.KASHIER_SERVER_WEBHOOK || "",
+      serverWebhookUrl:
+        process.env.KASHIER_SERVER_WEBHOOK ||
+        pickString(kashierSecret, [
+          "KASHIER_SERVER_WEBHOOK",
+          "server_webhook",
+          "serverWebhook",
+        ]) ||
+        "",
       paymentSessionTimeoutMin: parseInt(
-        process.env.PAYMENT_SESSION_TIMEOUT_MIN || "15",
+        process.env.PAYMENT_SESSION_TIMEOUT_MIN ||
+          pickString(kashierSecret, [
+            "PAYMENT_SESSION_TIMEOUT_MIN",
+            "payment_session_timeout_min",
+            "paymentSessionTimeoutMin",
+          ]) ||
+          "15",
         10,
       ),
     },
