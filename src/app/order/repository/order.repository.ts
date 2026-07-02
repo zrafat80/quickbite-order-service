@@ -1,26 +1,24 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { Knex } from 'knex';
-import { OrderEntity } from '../entity/order.entity';
-import { OrderStatus, PaymentMethod } from '../enums';
-import { ORDER_COLUMNS } from '../order.constants';
-import { ShardedKnex } from '../../../lib/sharding/shards';
+import { Inject, Injectable } from "@nestjs/common";
+import { Knex } from "knex";
+import { OrderEntity } from "../entity/order.entity";
+import { OrderStatus, PaymentMethod } from "../enums";
+import { ORDER_COLUMNS } from "../order.constants";
+import { ShardedKnex } from "../../../lib/sharding/shards";
 import {
   applyCursorPagination,
   applyFilters,
-} from '../../../lib/pagination/cursor-pagination';
+} from "../../../lib/pagination/cursor-pagination";
 import {
   CreateOrderInput,
   ExpirableOrderRow,
   ListByBranchOptions,
   ListByCustomerOptions,
   OrderOwnershipView,
-} from './order.repository.types';
+} from "./order.repository.types";
 
 @Injectable()
 export class OrderRepository {
-  constructor(
-    @Inject('KNEX_CONNECTION') private readonly knex: ShardedKnex,
-  ) {}
+  constructor(@Inject("KNEX_CONNECTION") private readonly knex: ShardedKnex) {}
 
   private toEntity(row: any): OrderEntity {
     return new OrderEntity({
@@ -29,7 +27,10 @@ export class OrderRepository {
       publicId: row.public_id,
       countryCode: row.country_code,
       restaurantId: Number(row.restaurant_id),
-      restaurantOwnerId: row.restaurant_owner_id != null ? Number(row.restaurant_owner_id) : null,
+      restaurantOwnerId:
+        row.restaurant_owner_id != null
+          ? Number(row.restaurant_owner_id)
+          : null,
       branchId: Number(row.branch_id),
       branchLat: row.branch_lat != null ? Number(row.branch_lat) : null,
       branchLng: row.branch_lng != null ? Number(row.branch_lng) : null,
@@ -46,7 +47,9 @@ export class OrderRepository {
       commission: Number(row.commission),
       currency: row.currency,
       paymentMethod: row.payment_method as PaymentMethod,
-      deliveryAgentId: row.delivery_agent_id ? Number(row.delivery_agent_id) : null,
+      deliveryAgentId: row.delivery_agent_id
+        ? Number(row.delivery_agent_id)
+        : null,
       assignmentAttempts: Number(row.assignment_attempts ?? 0),
       lastAssignmentAt: row.last_assignment_at,
       createdAt: row.created_at,
@@ -66,7 +69,7 @@ export class OrderRepository {
     input: CreateOrderInput,
     trx: Knex.Transaction,
   ): Promise<OrderEntity> {
-    const [row] = await trx('orders')
+    const [row] = await trx("orders")
       .insert({
         region: input.region,
         public_id: input.publicId,
@@ -98,9 +101,9 @@ export class OrderRepository {
     publicId: string,
   ): Promise<OrderEntity | null> {
     const row = await this.knex
-      .db(region)('orders')
+      .db(region)("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('public_id', publicId)
+      .where("public_id", publicId)
       .first();
     return row ? this.toEntity(row) : null;
   }
@@ -117,10 +120,10 @@ export class OrderRepository {
     limit: number,
   ): Promise<ExpirableOrderRow[]> {
     const db = this.knex.db(region);
-    const rows = await db('orders as o')
-      .select(['o.id', 'o.public_id', 'o.created_at', 'o.branch_id'])
-      .where('o.region', region)
-      .andWhere('o.status', OrderStatus.PENDING_PAYMENT)
+    const rows = await db("orders as o")
+      .select(["o.id", "o.public_id", "o.created_at", "o.branch_id"])
+      .where("o.region", region)
+      .andWhere("o.status", OrderStatus.PENDING_PAYMENT)
       .andWhereRaw(`o.created_at + (? || ' minutes')::interval < NOW()`, [
         graceMinutes,
       ])
@@ -133,7 +136,7 @@ export class OrderRepository {
             AND (s.expires_at IS NULL OR s.expires_at > NOW())
         )`,
       )
-      .orderBy('o.created_at', 'asc')
+      .orderBy("o.created_at", "asc")
       .limit(limit);
     return rows.map((r: any) => ({
       id: Number(r.id),
@@ -149,8 +152,8 @@ export class OrderRepository {
     createdAt: Date,
   ): Promise<OrderOwnershipView | null> {
     const row = await this.knex
-      .db(region)('orders')
-      .select(['id', 'public_id', 'customer_id', 'restaurant_id'])
+      .db(region)("orders")
+      .select(["id", "public_id", "customer_id", "restaurant_id"])
       .where({ id, created_at: createdAt })
       .first();
     if (!row) return null;
@@ -168,9 +171,9 @@ export class OrderRepository {
     options: ListByCustomerOptions,
   ): Promise<OrderEntity[]> {
     const db = this.knex.db(region);
-    let q = db('orders')
+    let q = db("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('customer_id', customerId);
+      .where("customer_id", customerId);
     q = applyFilters(q, options.filters);
     const rows = await applyCursorPagination(q, options.params);
     return rows.map((r: any) => this.toEntity(r));
@@ -182,9 +185,9 @@ export class OrderRepository {
     options: ListByBranchOptions,
   ): Promise<OrderEntity[]> {
     const db = this.knex.db(region);
-    let q = db('orders')
+    let q = db("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('branch_id', branchId);
+      .where("branch_id", branchId);
     q = applyFilters(q, options.filters);
     const rows = await applyCursorPagination(q, options.params);
     return rows.map((r: any) => this.toEntity(r));
@@ -202,27 +205,28 @@ export class OrderRepository {
       status: nextStatus,
       updated_at: this.knex.db(region).fn.now(),
     };
-    if (timestampColumn) update[timestampColumn] = this.knex.db(region).fn.now();
-    const [row] = await trx('orders')
+    if (timestampColumn)
+      update[timestampColumn] = this.knex.db(region).fn.now();
+    const [row] = await trx("orders")
       .where({ id: orderId, created_at: orderCreatedAt })
       .update(update)
       .returning(ORDER_COLUMNS as unknown as string[]);
     return this.toEntity(row);
   }
   async bulkCancelPendingPayment(
-      region: string,
-      ids: number[],
-      trx: Knex.Transaction,
+    region: string,
+    ids: number[],
+    trx: Knex.Transaction,
   ): Promise<number> {
     if (!ids || ids.length === 0) return 0;
 
-    const updatedCount = await trx('orders')
-        .whereIn('id', ids)
-        .andWhere('status', OrderStatus.PENDING_PAYMENT)
-        .update({
-          status: OrderStatus.CANCELLED,
-          cancelled_at: trx.fn.now(),
-        });
+    const updatedCount = await trx("orders")
+      .whereIn("id", ids)
+      .andWhere("status", OrderStatus.PENDING_PAYMENT)
+      .update({
+        status: OrderStatus.CANCELLED,
+        cancelled_at: trx.fn.now(),
+      });
 
     return updatedCount;
   }
@@ -237,18 +241,17 @@ export class OrderRepository {
     region: string,
     agentId: number,
     statusFilter: string | undefined,
-    params: import('../../../lib/pagination/cursor-pagination').PaginationParams,
+    params: import("../../../lib/pagination/cursor-pagination").PaginationParams,
   ): Promise<OrderEntity[]> {
     const db = this.knex.db(region);
-    let q = db('orders')
+    let q = db("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('delivery_agent_id', agentId);
+      .where("delivery_agent_id", agentId);
     if (statusFilter) {
-      q = q.andWhere('status', statusFilter);
+      q = q.andWhere("status", statusFilter);
     }
-    const { applyCursorPagination: applyCursor } = await import(
-      '../../../lib/pagination/cursor-pagination'
-    );
+    const { applyCursorPagination: applyCursor } =
+      await import("../../../lib/pagination/cursor-pagination");
     const rows = await applyCursor(q, params);
     return rows.map((r: any) => this.toEntity(r));
   }
@@ -262,10 +265,10 @@ export class OrderRepository {
     agentId: number,
   ): Promise<OrderEntity[]> {
     const rows = await this.knex
-      .db(region)('orders')
+      .db(region)("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('delivery_agent_id', agentId)
-      .whereIn('status', [OrderStatus.ASSIGNED, OrderStatus.PICKED]);
+      .where("delivery_agent_id", agentId)
+      .whereIn("status", [OrderStatus.ASSIGNED, OrderStatus.PICKED]);
     return rows.map((r: any) => this.toEntity(r));
   }
 
@@ -281,14 +284,18 @@ export class OrderRepository {
     agentId: number,
     trx: Knex.Transaction,
   ): Promise<OrderEntity | null> {
-    const rows = await trx('orders')
-      .where({ id: orderId, created_at: orderCreatedAt, status: OrderStatus.READY })
+    const rows = await trx("orders")
+      .where({
+        id: orderId,
+        created_at: orderCreatedAt,
+        status: OrderStatus.READY,
+      })
       .update({
         status: OrderStatus.ASSIGNED,
         delivery_agent_id: agentId,
         assigned_at: trx.fn.now(),
         last_assignment_at: trx.fn.now(),
-        assignment_attempts: trx.raw('assignment_attempts + 1'),
+        assignment_attempts: trx.raw("assignment_attempts + 1"),
         updated_at: trx.fn.now(),
       })
       .returning(ORDER_COLUMNS as unknown as string[]);
@@ -305,8 +312,12 @@ export class OrderRepository {
     orderCreatedAt: Date,
     trx: Knex.Transaction,
   ): Promise<OrderEntity | null> {
-    const rows = await trx('orders')
-      .where({ id: orderId, created_at: orderCreatedAt, status: OrderStatus.ASSIGNED })
+    const rows = await trx("orders")
+      .where({
+        id: orderId,
+        created_at: orderCreatedAt,
+        status: OrderStatus.ASSIGNED,
+      })
       .update({
         status: OrderStatus.READY,
         delivery_agent_id: null,
@@ -328,27 +339,41 @@ export class OrderRepository {
     orderCreatedAt: Date,
   ): Promise<OrderEntity | null> {
     const row = await this.knex
-      .db(region)('orders')
+      .db(region)("orders")
       .select(ORDER_COLUMNS as unknown as string[])
       .where({ id: orderId, created_at: orderCreatedAt })
       .first();
     return row ? this.toEntity(row) : null;
   }
 
-  async findIgnoredAssignments(region: string, timeoutSec: number): Promise<OrderEntity[]> {
-    const rows = await this.knex.db(region)('orders')
+  async findIgnoredAssignments(
+    region: string,
+    timeoutSec: number,
+    limit = 100,
+  ): Promise<OrderEntity[]> {
+    const rows = await this.knex
+      .db(region)("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('status', OrderStatus.ASSIGNED)
-      .whereNull('accepted_at')
-      .whereRaw(`last_assignment_at < NOW() - (? || ' seconds')::interval`, [timeoutSec]);
+      .where("status", OrderStatus.ASSIGNED)
+      .whereNull("accepted_at")
+      .whereRaw(`last_assignment_at < NOW() - (? || ' seconds')::interval`, [
+        timeoutSec,
+      ])
+      .orderBy("last_assignment_at", "asc")
+      .orderBy("created_at", "asc")
+      .limit(limit);
     return rows.map((r: any) => this.toEntity(r));
   }
 
-  async findAllAssigned(region: string): Promise<OrderEntity[]> {
-    const rows = await this.knex.db(region)('orders')
+  async findAllAssigned(region: string, limit = 100): Promise<OrderEntity[]> {
+    const rows = await this.knex
+      .db(region)("orders")
       .select(ORDER_COLUMNS as unknown as string[])
-      .where('status', OrderStatus.ASSIGNED)
-      .whereNotNull('delivery_agent_id');
+      .where("status", OrderStatus.ASSIGNED)
+      .whereNotNull("delivery_agent_id")
+      .orderBy("last_assignment_at", "asc")
+      .orderBy("created_at", "asc")
+      .limit(limit);
     return rows.map((r: any) => this.toEntity(r));
   }
 
@@ -356,15 +381,28 @@ export class OrderRepository {
   // `last_assignment_at` is NULL until an actual candidate is tried, so we
   // fall back to `ready_at` for the first sweeper pass. Uses the partial
   // index idx_orders_status_created_at (status IN ('ready','assigned')).
-  async findStaleReady(region: string, staleSec: number): Promise<OrderEntity[]> {
-    const rows = await this.knex.db(region)('orders')
-      .select(ORDER_COLUMNS as unknown as string[])
-      .where('status', OrderStatus.READY)
+  async findStaleReady(
+    region: string,
+    staleSec: number,
+    limit = 100,
+  ): Promise<ExpirableOrderRow[]> {
+    const rows = await this.knex
+      .db(region)("orders")
+      .select("id", "public_id", "created_at", "branch_id")
+      .where("status", OrderStatus.READY)
       .whereRaw(
         `COALESCE(last_assignment_at, ready_at) < NOW() - (? || ' seconds')::interval`,
         [staleSec],
-      );
-    return rows.map((r: any) => this.toEntity(r));
+      )
+      .orderByRaw("COALESCE(last_assignment_at, ready_at) ASC")
+      .orderBy("created_at", "asc")
+      .limit(limit);
+    return rows.map((r: any) => ({
+      id: Number(r.id),
+      publicId: r.public_id,
+      createdAt: r.created_at,
+      branchId: Number(r.branch_id),
+    }));
   }
 
   // Stamps last_assignment_at = NOW() without touching status. Called by the
@@ -375,7 +413,8 @@ export class OrderRepository {
     orderId: number,
     orderCreatedAt: Date,
   ): Promise<void> {
-    await this.knex.db(region)('orders')
+    await this.knex
+      .db(region)("orders")
       .where({ id: orderId, created_at: orderCreatedAt })
       .update({ last_assignment_at: this.knex.db(region).fn.now() });
   }

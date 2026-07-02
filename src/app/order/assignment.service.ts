@@ -1,39 +1,38 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Knex } from 'knex';
-import { OrderStatus } from './enums';
-import { OrderRepository } from './repository/order.repository';
+import { Inject, Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Knex } from "knex";
+import { OrderStatus } from "./enums";
+import { OrderRepository } from "./repository/order.repository";
 
-import { OrderEntity } from './entity/order.entity';
-import { PresenceService } from '../agent/presence.service';
-import { AgentPresenceRepository } from '../agent/repository/agent-presence.repository';
-import { AgentEarningRepository } from '../agent/repository/agent-earning.repository';
-import { RestaurantBalanceRepository } from '../restaurant-finance/repository/restaurant-balance.repository';
-import { TransactionRepository } from '../payment/repository/transaction.repository';
-import { BranchClient } from '../../lib/core-client/branch.client';
-import { WsPublisher } from '../../lib/websocket/ws.publisher';
-import { ShardedKnex } from '../../lib/sharding/shards';
-import { AssignmentCandidate, TryAssignResult } from './assignment.service.types';
-import { DeliveryTaskResponseDTO } from '../agent/dto/agent.response.dto';
+import { OrderEntity } from "./entity/order.entity";
+import { PresenceService } from "../agent/presence.service";
+import { AgentPresenceRepository } from "../agent/repository/agent-presence.repository";
+import { AgentEarningRepository } from "../agent/repository/agent-earning.repository";
+import { RestaurantBalanceRepository } from "../restaurant-finance/repository/restaurant-balance.repository";
+import { TransactionRepository } from "../payment/repository/transaction.repository";
+import { BranchClient } from "../../lib/core-client/branch.client";
+import { WsPublisher } from "../../lib/websocket/ws.publisher";
+import { ShardedKnex } from "../../lib/sharding/shards";
+import {
+  AssignmentCandidate,
+  TryAssignResult,
+} from "./assignment.service.types";
+import { DeliveryTaskResponseDTO } from "../agent/dto/agent.response.dto";
 import {
   TransactionStatus,
   TransactionType,
   TransactionMethod,
-} from '../payment/enums';
-import {REDIS_CLIENT} from "../../lib/cache/redis.module";
+} from "../payment/enums";
+import { REDIS_CLIENT } from "../../lib/cache/redis.module";
 import Redis from "ioredis";
-import {presenceKeys} from "../agent/presence.constants";
+import { presenceKeys } from "../agent/presence.constants";
 
 @Injectable()
 export class AssignmentService {
   private readonly logger = new Logger(AssignmentService.name);
 
   constructor(
-    @Inject('KNEX_CONNECTION') private readonly knex: ShardedKnex,
+    @Inject("KNEX_CONNECTION") private readonly knex: ShardedKnex,
     private readonly orderRepo: OrderRepository,
     private readonly presenceService: PresenceService,
     private readonly presenceRepo: AgentPresenceRepository,
@@ -51,14 +50,24 @@ export class AssignmentService {
    * Called after an order transitions to READY. Finds the best nearby agent
    * and assigns the order. Fire-and-forget — failures are logged, not thrown.
    */
-  async tryAssign(region: string, orderId: number, orderCreatedAt: Date): Promise<TryAssignResult> {
-    const order = await this.orderRepo.findByCompositeId(region, orderId, orderCreatedAt);
+  async tryAssign(
+    region: string,
+    orderId: number,
+    orderCreatedAt: Date,
+  ): Promise<TryAssignResult> {
+    const order = await this.orderRepo.findByCompositeId(
+      region,
+      orderId,
+      orderCreatedAt,
+    );
     if (!order || order.status !== OrderStatus.READY) {
-      this.logger.warn(`tryAssign: order ${orderId} not in READY state, skipping`);
+      this.logger.warn(
+        `tryAssign: order ${orderId} not in READY state, skipping`,
+      );
       return { assigned: false };
     }
 
-    const cfg = this.configService.get<any>('deliveries');
+    const cfg = this.configService.get<any>("deliveries");
     const radiusMeters = cfg.assignmentRadiusMeters;
     const k = cfg.assignmentCandidateK;
     const staleSec = cfg.presenceStaleSec;
@@ -69,11 +78,9 @@ export class AssignmentService {
       this.logger.warn(
         `tryAssign: order ${order.publicId} exhausted ${maxAttempts} attempts`,
       );
-      this.wsPublisher.emit(
-        `admin:${region}:alerts`,
-        'assignment.unassigned',
-        { orderId: order.publicId },
-      );
+      this.wsPublisher.emit(`admin:${region}:alerts`, "assignment.unassigned", {
+        orderId: order.publicId,
+      });
       return { assigned: false, exhausted: true };
     }
 
@@ -90,17 +97,27 @@ export class AssignmentService {
       if (totalInRegion === 0) {
         // Redis is totally empty. It might have crashed or evicted keys.
         // We cannot trust it. We must use Postgres.
-        this.logger.warn(`Redis geo-index for ${region} is completely empty. Falling back to Postgres.`);
+        this.logger.warn(
+          `Redis geo-index for ${region} is completely empty. Falling back to Postgres.`,
+        );
         redisIsReliable = false;
       } else {
         // Redis is healthy and has data. Get nearby drivers.
         candidates = await this.findCandidatesRedis(
-            region, branch.lng, branch.lat, radiusMeters, k, staleSec, order.id
+          region,
+          branch.lng,
+          branch.lat,
+          radiusMeters,
+          k,
+          staleSec,
+          order.id,
         );
       }
     } catch (err) {
       // Redis connection failed!
-      this.logger.error(`Redis connection failed during assignment: ${(err as Error).message}`);
+      this.logger.error(
+        `Redis connection failed during assignment: ${(err as Error).message}`,
+      );
       redisIsReliable = false;
     }
     if (!redisIsReliable) {
@@ -115,7 +132,10 @@ export class AssignmentService {
       // Filter out rejected agents (same check the Redis path does)
       const filtered: AssignmentCandidate[] = [];
       for (const c of pgCandidates) {
-        const rejected = await this.presenceService.isRejected(order.id, c.agentId);
+        const rejected = await this.presenceService.isRejected(
+          order.id,
+          c.agentId,
+        );
         if (!rejected) {
           filtered.push({
             agentId: c.agentId,
@@ -137,17 +157,24 @@ export class AssignmentService {
 
     // 3. Sort by (active_orders ASC, distance ASC)
     candidates.sort((a, b) => {
-      if (a.activeOrders !== b.activeOrders) return a.activeOrders - b.activeOrders;
+      if (a.activeOrders !== b.activeOrders)
+        return a.activeOrders - b.activeOrders;
       return a.distance - b.distance;
     });
 
     // 4. Try each candidate
     for (const candidate of candidates) {
       if (candidate.activeOrders > 0) break;
-      const result = await this.tryAssignToAgent(region, order, candidate.agentId);
+      const result = await this.tryAssignToAgent(
+        region,
+        order,
+        candidate.agentId,
+      );
       if (result) {
         // Fetch branch metadata for the WS event
-        const branch = await this.branchClient.getBranch(result.branchId).catch(() => null);
+        const branch = await this.branchClient
+          .getBranch(result.branchId)
+          .catch(() => null);
         const resultWithBranch = {
           ...result,
           branch: branch ?? undefined,
@@ -156,7 +183,7 @@ export class AssignmentService {
         // Success! Emit WS event
         this.wsPublisher.emit(
           `agent:${candidate.agentId}`,
-          'task.assigned',
+          "task.assigned",
           DeliveryTaskResponseDTO.from(resultWithBranch as any),
         );
         return { assigned: true, agentId: candidate.agentId };
@@ -177,7 +204,11 @@ export class AssignmentService {
     orderCreatedAt: Date,
     agentId: number,
   ): Promise<OrderEntity | null> {
-    const order = await this.orderRepo.findByCompositeId(region, orderId, orderCreatedAt);
+    const order = await this.orderRepo.findByCompositeId(
+      region,
+      orderId,
+      orderCreatedAt,
+    );
     if (!order || order.status !== OrderStatus.READY) {
       return null;
     }
@@ -190,14 +221,23 @@ export class AssignmentService {
     orderId: number,
     orderCreatedAt: Date,
   ): Promise<TryAssignResult> {
-    const order = await this.orderRepo.findByCompositeId(region, orderId, orderCreatedAt);
+    const order = await this.orderRepo.findByCompositeId(
+      region,
+      orderId,
+      orderCreatedAt,
+    );
     if (!order) return { assigned: false };
 
     // If currently assigned, clear the assignment first
     if (order.status === OrderStatus.ASSIGNED && order.deliveryAgentId) {
       const trx = await this.knex.db(region).transaction();
       try {
-        await this.orderRepo.clearAssignment(region, orderId, orderCreatedAt, trx);
+        await this.orderRepo.clearAssignment(
+          region,
+          orderId,
+          orderCreatedAt,
+          trx,
+        );
         await trx.commit();
       } catch (err) {
         await trx.rollback();
@@ -206,7 +246,11 @@ export class AssignmentService {
 
       // Add current agent to the reject set
       await this.presenceService.addRejection(orderId, order.deliveryAgentId);
-      await this.presenceService.incrementActiveOrders(region, order.deliveryAgentId, -1);
+      await this.presenceService.incrementActiveOrders(
+        region,
+        order.deliveryAgentId,
+        -1,
+      );
     }
 
     // Re-run the assignment loop
@@ -226,7 +270,12 @@ export class AssignmentService {
     // 2. Clear assignment in DB
     const trx = await this.knex.db(region).transaction();
     try {
-      await this.orderRepo.clearAssignment(region, orderId, orderCreatedAt, trx);
+      await this.orderRepo.clearAssignment(
+        region,
+        orderId,
+        orderCreatedAt,
+        trx,
+      );
       await trx.commit();
     } catch (err) {
       await trx.rollback();
@@ -239,11 +288,9 @@ export class AssignmentService {
     // 4. Re-try assignment
     const result = await this.tryAssign(region, orderId, orderCreatedAt);
     if (!result.assigned && result.exhausted) {
-      this.wsPublisher.emit(
-        `admin:${region}:alerts`,
-        'assignment.unassigned',
-        { orderId },
-      );
+      this.wsPublisher.emit(`admin:${region}:alerts`, "assignment.unassigned", {
+        orderId,
+      });
     }
   }
 
@@ -256,39 +303,72 @@ export class AssignmentService {
    *    — e.g. region empty, all rejected — and nothing else retries them).
    */
   async performSweep(region: string): Promise<void> {
+    const batchSize =
+      this.configService.get<number>("deliveries.assignmentSweepBatchSize") ??
+      100;
+
     // A. Handle Ignored Assignments (Drivers who are silent for > 60s)
-    const ignored = await this.orderRepo.findIgnoredAssignments(region, 60);
+    const ignored = await this.orderRepo.findIgnoredAssignments(
+      region,
+      60,
+      batchSize,
+    );
     if (ignored.length > 0) {
-      this.logger.warn(`Sweep: Found ${ignored.length} ignored assignments in ${region}. Reassigning...`);
+      this.logger.warn(
+        `Sweep: Found ${ignored.length} ignored assignments in ${region}. Reassigning...`,
+      );
       for (const order of ignored) {
         if (!order.deliveryAgentId) continue;
-        await this.handleAgentReject(region, order.id, order.createdAt, order.deliveryAgentId)
-          .catch(err => this.logger.error(`Sweep: Failed to reassign ignored order ${order.publicId}: ${err.message}`));
+        await this.handleAgentReject(
+          region,
+          order.id,
+          order.createdAt,
+          order.deliveryAgentId,
+        ).catch((err) =>
+          this.logger.error(
+            `Sweep: Failed to reassign ignored order ${order.publicId}: ${err.message}`,
+          ),
+        );
       }
     }
 
     // B. Handle Stale/Offline Agents
-    const assigned = await this.orderRepo.findAllAssigned(region);
+    const assigned = await this.orderRepo.findAllAssigned(region, batchSize);
     if (assigned.length > 0) {
-      const agentIds = [...new Set(assigned.map(o => Number(o.deliveryAgentId)))];
-      const metaMap = await this.presenceService.getAgentsMeta(region, agentIds);
+      const agentIds = [
+        ...new Set(assigned.map((o) => Number(o.deliveryAgentId))),
+      ];
+      const metaMap = await this.presenceService.getAgentsMeta(
+        region,
+        agentIds,
+      );
 
       const now = Date.now();
       const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-      const stale = assigned.filter(order => {
+      const stale = assigned.filter((order) => {
         const agentId = Number(order.deliveryAgentId);
         const presence = metaMap.get(agentId);
         if (!presence || !presence.isOnline) return true; // Offline
-        return (now - presence.lastSeenAt) > HEARTBEAT_TIMEOUT_MS; // Missing heartbeat
+        return now - presence.lastSeenAt > HEARTBEAT_TIMEOUT_MS; // Missing heartbeat
       });
 
       if (stale.length > 0) {
-        this.logger.warn(`Sweep: Found ${stale.length} stale/offline agents in ${region}. Reassigning...`);
+        this.logger.warn(
+          `Sweep: Found ${stale.length} stale/offline agents in ${region}. Reassigning...`,
+        );
         for (const order of stale) {
           if (!order.deliveryAgentId) continue;
-          await this.handleAgentReject(region, order.id, order.createdAt, order.deliveryAgentId)
-            .catch(err => this.logger.error(`Sweep: Failed to reassign stale order ${order.publicId}: ${err.message}`));
+          await this.handleAgentReject(
+            region,
+            order.id,
+            order.createdAt,
+            order.deliveryAgentId,
+          ).catch((err) =>
+            this.logger.error(
+              `Sweep: Failed to reassign stale order ${order.publicId}: ${err.message}`,
+            ),
+          );
         }
       }
     }
@@ -298,16 +378,28 @@ export class AssignmentService {
     // We bump last_assignment_at first so a still-empty region doesn't cause
     // us to re-pick the same row on the next 10s tick.
     const staleSec =
-      this.configService.get<number>('deliveries.readyStaleSec') ?? 60;
-    const staleReady = await this.orderRepo.findStaleReady(region, staleSec);
+      this.configService.get<number>("deliveries.readyStaleSec") ?? 60;
+    const staleReady = await this.orderRepo.findStaleReady(
+      region,
+      staleSec,
+      batchSize,
+    );
     if (staleReady.length > 0) {
-      this.logger.warn(`Sweep: Found ${staleReady.length} stuck ready orders in ${region}. Retrying...`);
+      this.logger.warn(
+        `Sweep: Found ${staleReady.length} stuck ready orders in ${region}. Retrying...`,
+      );
       for (const order of staleReady) {
         try {
-          await this.orderRepo.touchAssignmentAttempt(region, order.id, order.createdAt);
+          await this.orderRepo.touchAssignmentAttempt(
+            region,
+            order.id,
+            order.createdAt,
+          );
           await this.tryAssign(region, order.id, order.createdAt);
         } catch (err) {
-          this.logger.error(`Sweep: Failed to retry ready order ${order.publicId}: ${(err as Error).message}`);
+          this.logger.error(
+            `Sweep: Failed to retry ready order ${order.publicId}: ${(err as Error).message}`,
+          );
         }
       }
     }
@@ -326,8 +418,8 @@ export class AssignmentService {
     trx: Knex.Transaction,
   ): Promise<void> {
     // 1. COD: flip cod_collection pending → succeeded
-    if (order.paymentMethod === 'cod') {
-      await trx('transactions')
+    if (order.paymentMethod === "cod") {
+      await trx("transactions")
         .where({
           order_id: order.id,
           order_created_at: order.createdAt,
@@ -347,22 +439,26 @@ export class AssignmentService {
     //    branch.commission is in bps (e.g. 2000 = 20%).
     //    deliveryFee = 1500, commission = floor(1500 × 2000 / 10000) = 300
     const commissionBps = branch.commission ?? 0;
-    const commission = Math.floor(branch.deliveryFee * commissionBps / 10000);
+    const commission = Math.floor((branch.deliveryFee * commissionBps) / 10000);
 
     // 4. Agent earning = deliveryFee − commission (the agent's share).
     //    deliveryFee = 1500, commission = 300 → agentEarning = 1200 (80%)
     const earningAmount = branch.deliveryFee - commission;
-    await this.earningRepo.insertIdempotent(region, {
+    await this.earningRepo.insertIdempotent(
       region,
-      agentId: order.deliveryAgentId!,
-      orderId: order.id,
-      orderCreatedAt: order.createdAt,
-      amount: earningAmount,
-      currency: order.currency,
-    }, trx);
+      {
+        region,
+        agentId: order.deliveryAgentId!,
+        orderId: order.id,
+        orderCreatedAt: order.createdAt,
+        amount: earningAmount,
+        currency: order.currency,
+      },
+      trx,
+    );
 
     // 5. Persist commission on the order row
-    await trx('orders')
+    await trx("orders")
       .where({ id: order.id, created_at: order.createdAt })
       .update({ commission, updated_at: trx.fn.now() });
 
@@ -496,10 +592,15 @@ export class AssignmentService {
   ): Promise<OrderEntity | null> {
     const trx = await this.knex.db(region).transaction();
     try {
-      const staleSec = this.configService.get<number>('deliveries.presenceStaleSec') ?? 300;
+      const staleSec =
+        this.configService.get<number>("deliveries.presenceStaleSec") ?? 300;
 
       // Lock the agent row
-      const presence = await this.presenceRepo.claimForUpdate(region, agentId, trx);
+      const presence = await this.presenceRepo.claimForUpdate(
+        region,
+        agentId,
+        trx,
+      );
       if (!presence || !presence.isOnline) {
         await trx.rollback();
         return null;
@@ -550,20 +651,20 @@ export class AssignmentService {
    * Drops stale, rejected, offline agents. Returns sorted candidates.
    */
   private async findCandidatesRedis(
-      region: string,
-      lng: number,
-      lat: number,
-      radiusMeters: number,
-      k: number,
-      staleSec: number,
-      orderId: number,
+    region: string,
+    lng: number,
+    lat: number,
+    radiusMeters: number,
+    k: number,
+    staleSec: number,
+    orderId: number,
   ): Promise<AssignmentCandidate[]> {
     const nearby = await this.presenceService.findNearbyAgentsRedis(
-        region,
-        lng,
-        lat,
-        radiusMeters,
-        k,
+      region,
+      lng,
+      lat,
+      radiusMeters,
+      k,
     );
 
     if (nearby.length === 0) return [];
@@ -586,7 +687,10 @@ export class AssignmentService {
       }
 
       // 2. Drop agents who already rejected this specific order
-      const rejected = await this.presenceService.isRejected(orderId, n.agentId);
+      const rejected = await this.presenceService.isRejected(
+        orderId,
+        n.agentId,
+      );
       if (rejected) continue;
 
       candidates.push({
